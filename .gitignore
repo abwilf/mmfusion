@@ -1,7 +1,9 @@
 results/*
 output/*
-data/*
 __pycache__/*
+data/iemocap/wavs
+
 models/*
 tensors/*
 .*.pkl
+.vscode

@@ -214,6 +214,18 @@ def load_data():
         audio, text, labels, utt_masks = [], [], [], []
         vid_keys = ar(vid_keys)
         unique_vid_keys = np.unique(vid_keys)
+
+        if args['train_keys'] is None:
+            args['train_keys'], args['test_keys'] = train_test_split(unique_vid_keys, test_size=.2, random_state=11)
+
+        if args['mode'] == 'inference':
+            args['test_keys'] = np.squeeze(unique_vid_keys)
+            args['train_keys'] = ar([])
+
+        train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], unique_vid_keys))[0]
+        test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], unique_vid_keys))[0]
+        assert len(train_idxs) + len(test_idxs) == len(unique_vid_keys), 'If this assertion fails, it means not all video keys were accounted for in the keys provided'
+
         for vid_key in unique_vid_keys:
             vid_idxs = np.where(vid_keys==vid_key)[0]
             num_utts = len(vid_idxs)
@@ -259,17 +271,6 @@ def load_data():
                 encoded = np.pad(encoded, ((0, max_utts-num_utts), (0,0), (0,0)), 'constant')
                 new_data.append(encoded)
             text = ar(new_data)
-
-        if args['train_keys'] is None:
-            args['train_keys'], args['test_keys'] = train_test_split(unique_vid_keys, test_size=.2, random_state=11)
-
-        if args['mode'] == 'inference':
-            args['test_keys'] = np.squeeze(unique_vid_keys)
-            args['train_keys'] = ar([])
-
-        train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], unique_vid_keys))[0]
-        test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], unique_vid_keys))[0]
-        assert len(train_idxs) + len(test_idxs) == len(unique_vid_keys), 'If this assertion fails, it means not all video keys were accounted for in the keys provided'
 
         if 'audio' in args['modality'] and 'text' in args['modality']:
             train = ar(audio)[train_idxs], ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs]
@@ -847,7 +848,7 @@ if __name__ == '__main__':
 
     args = vars(parser.compile_argparse())
 
-    keys = load_json(args['keys_path']+'hey')
+    keys = load_json(args['keys_path'])
     if keys is not None:
         args['train_keys'], args['test_keys'] = LD(keys)[['train_keys', 'test_keys']]
         assert np.all(arlmap(lambda elt: elt not in args['train_keys'], args['test_keys'])), 'There cannot be any overlapping elements between train and test keys'
