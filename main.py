@@ -873,8 +873,8 @@ if __name__ == '__main__':
                     full_res[k].append(v)
             
         full_res = {k:ar(v) for k,v in full_res.items()}
-        full_res['train_keys'] = args['train_keys']
-        full_res['test_keys'] = args['test_keys']
+        # full_res['train_keys'] = args['train_keys']
+        # full_res['test_keys'] = args['test_keys']
         save_json(join(out_dir, 'results.txt'), full_res)
 
     else:

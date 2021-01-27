@@ -1,9 +1,12 @@
 results/*
 output/*
 __pycache__/*
-data/iemocap/wavs
+data/iemocap/wavs*
 data/iemocap/mfb.csd
 data/iemocap/mfb.pk
+data/uni.pk
+data/iemocap/ie_wavs.tar
+data/iemocap/mfb*
 
 models/*
 tensors/*

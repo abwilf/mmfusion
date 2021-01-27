@@ -1,7 +1,6 @@
 from utils import *
 import librosa
 import soundfile as sf
-from python_speech_features import fbank
 import scipy.io.wavfile as wav
 import subprocess
 
@@ -21,50 +20,6 @@ def resampleAudioFile(inFile, outFile, outFs):
 def normAudioAmplitude(sig):
     return sig.astype(np.float)/-np.iinfo(np.int16).min
 
-def extractMfbs(x, fs):
-    # normalize
-    # x = normAudioAmplitude(x)
-    
-        # Constants
-    MFB_DIM = 40
-    MFB_WIN_LEN = 0.025
-    MFB_NFFT = 2048
-    MFB_LOW_FREQ = 0
-    MFB_HIGH_FREQ = None
-    MFB_PREEMPH = 0.97
-
-    # Extract
-    x = fbank(x, samplerate=fs, winlen=MFB_WIN_LEN,
-                     winstep=MFB_WIN_STEP, nfilt=MFB_DIM, nfft=MFB_NFFT,
-                     lowfreq=MFB_LOW_FREQ, highfreq=MFB_HIGH_FREQ,
-                     preemph=MFB_PREEMPH, winfunc=np.hanning)
-    x = np.log(x[0] + 1e-8)
-    
-    # z-Normalize utterance
-    stdVal = np.std(x)
-    if stdVal == 0:
-       stdVal = 1
-    x = (x-np.mean(x))/stdVal
-    
-    # Clamp to 3 std
-    clampVal = 3.0
-    x[x>clampVal] = clampVal
-    x[x<-clampVal] = -clampVal
-    
-    return x    
-
-def get_mfbs(audio_path, sample_rate=None):
-    if sample_rate is None: # leave unchanged
-        tmpPath = audio_path
-        rate, sig = wav.read(tmpPath)
-    else:
-        tmpPath = join(audio_path, '.tmp')
-        resampleAudioFile(audio_path, tmpPath, sample_rate)
-        rm_file(tmpPath)
-        rate, sig = wav.read(tmpPath)
-
-    mfbs = extractMfbs(sig, rate)
-    return mfbs
 
 def new_get_mfbs(wav_file):
     y, sr = librosa.load(wav_file, sr=SR)
