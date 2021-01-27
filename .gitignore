@@ -1,0 +1,7 @@
+results/*
+output/*
+data/*
+__pycache__/*
+models/*
+tensors/*
+.*.pkl
