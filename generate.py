@@ -9,13 +9,14 @@ from utils import *
 
 if __name__=="__main__":
     hash_len = 5 # the number of characters in each hash.  if running lots of tests, may have collision if too few chars.  elif running few tests, can be nice to have smaller identifying strings
-    email_args= {
-        'subject': 'Hello there',
-        'text': 'hi',
-        'to_addr': 'dummyblah123@gmail.com',
-        'secrets_path': '/z/abwilf/dw/mailgun_secrets.json',
-    }
-    grid = standard_grid.Grid('./main.py','./results/', hash_len=hash_len, email_args=email_args)
+    # email_args= {
+    #     'subject': 'Hello there',
+    #     'text': 'hi',
+    #     'to_addr': 'dummyblah123@gmail.com',
+    #     'secrets_path': '/z/abwilf/dw/mailgun_secrets.json',
+    # }
+    # grid = standard_grid.Grid('./main.py','./results/', hash_len=hash_len, email_args=email_args)
+    grid = standard_grid.Grid('./main.py','./results/', hash_len=hash_len)
     mkdirp('./results/')
 
     hp = {

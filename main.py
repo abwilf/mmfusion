@@ -80,7 +80,7 @@ def deploy_unaligned_mfb_csd():
 
     assert subset(label_keys, wav_keys), f'The keys of the videos in the wav directory {args["wav_dir"]} must be a subset of the keys in the labels file {args["labels_path"]}. e.g.: if there exists a label with the key "abc", there should be a corresponding "abc.wav" in the wav directory'
 
-    if exists(args['audio_path']) and not args['overwrite_mfb_csd']:
+    if exists(args['audio_path']) and not args['overwrite_mfbs']:
         print(f'MFBs exist in {args["audio_path"]}.  Moving on...')
         return args["audio_path"]
 
@@ -98,11 +98,12 @@ def deploy_unaligned_mfb_csd():
     pool.close() 
     pool.join()
 
-    compseq = mmdatasdk.computational_sequence(csd_name)
-    compseq.setData(data, csd_name)
-    metadata_template['root name'] = csd_name
-    compseq.setMetadata(metadata_template, csd_name)
-    compseq.deploy(args["audio_path"])
+    # compseq = mmdatasdk.computational_sequence(csd_name)
+    # compseq.setData(data, csd_name)
+    # metadata_template['root name'] = csd_name
+    # compseq.setMetadata(metadata_template, csd_name)
+    # compseq.deploy(args["audio_path"].replace('.pk', '.csd'))
+    save_pk(args['audio_path'].replace('.csd', '.pk'), data)
     return args["audio_path"]
 
 def csd_to_pk(ds, key, path):
@@ -112,7 +113,6 @@ def csd_to_pk(ds, key, path):
             'features': ar(ds[key][k]['features']),
             'intervals': ar(ds[key][k]['intervals']),
         }
-
     save_pk(path, new_text)
 
 def get_compseq(path, key_name):
@@ -361,7 +361,7 @@ def train_within_multi(train,test):
     train_audio, train_text, train_labels = train
     test_audio, test_text, test_labels = test
 
-    dropout=0.2
+    dropout=args['drop_within_multi']
     TD = TimeDistributed
 
     text_input = Input(shape=train_text.shape[1:], name='text')
@@ -800,32 +800,32 @@ if __name__ == '__main__':
     mkdirp(models_path)
 
     params = [
-        ('--ds',str,'iemocap', 'ds name in [iemocap, mosi, mosei]'),
-        ('--data_path',str,'/z/abwilf/mmfusion/temp', 'path to data'),
-        ('--labels_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.csd'), ''),
+        # core paths
+        ('--transcripts_path',str,join(ie_path, 'IEMOCAP_TimestampedWords.pk'), ''),
+        ('--audio_path',str,join(ie_path, 'mfb.pk'), ''),
+        ('--labels_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), ''),
+        ('--dummy_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), 'Used to initialize dataset.  Can be any valid csd'),
+        ('--tensors_path',str, join(tensors_base_path, 'tensors.pk'), 'Where tensors will be stored from this run.  If "unique", will store a hash in tensors'),
+        ('--wav_dir',str, join(ie_path, 'wavs'), ''),
+        ('--model_path',str,join(models_path, 'model'), ''),
+        ('--uni_path',str,uni_path, 'Where unimodal activations are stored before feeding into hffn (in the case of cross utterance multimodal)'),
 
-        ('--dummy_path',str,join(ie_path, 'IEMOCAP_EmotionLabels.csd'), 'Used to initialize dataset.  Can be any valid csd'),
-        ('--tensors_path',str,join(tensors_base_path, 'tensors.pk'), ''),
-        ('--results_path', str, 'results.txt'),
-        ('--inf_path', str, 'inference.pk'),
-        ('--evaluate_inference', int, 0, 'If true, evaluate using labels instead of actually inferring.  This can be a good sanity check on the training process'),
-        ('--seq_len', int,50, ''),
-        ('--cross_utterance', int,0, ''),
-        ('--modality', str,'text', 'modalities separated by ,'),
-        ('--wav_dir',str,'/z/abwilf/iemocap_wavs/clean', ''),
+        # core options
+        ('--mode',str,'train', 'train or inference'),
+        ('--cross_utterance', int, 0, ''),
+        ('--modality', str,'text', 'modalities separated by ,.  options are ["text,audio", "audio,text", "audio", "text"]'),
+        ('--evaluate_inference', int, 0, 'If mode==inference and this is 1, evaluate using labels passed in instead of returning prediction.  This can be a good sanity check on the training process if you have labels'),
+        ('--overwrite_tensors', int, 0, 'Do you want to overwrite tensors in tensors_path or not?'),
+        ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
+        ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
 
-        ('--transcripts_path',str,join(ie_path, 'IEMOCAP_TimestampedWords.csd'), ''),
-        ('--uni_path',str,uni_path, 'Where unimodal activations are stored before feeding into hffn (cross utterance multimodal)'),
-        ('--audio_path',str,join(ie_path, 'mfb.csd'), ''),
-        
-        ('--model_path',str,join(models_path, 'model'), 'path to data'),
-
+        # hyperparameters
         ('--epochs', int, 500, ''),
-        ('--trials', int, 1, ''),
-        ('--bs', int, 10, ''),
-    
+        ('--trials', int, 2, 'Number of trials you want to run.  All results will be saved.'),
+        ('--seq_len', int, 50, 'The max sequence length.  If involving text, this will mean max number of words per utterance.  If involving only audio, this will be the max number of mfbs.'),
+        ('--bs', int, 10, 'Batch size'),
+
         ('--lstm_units_text', int, 32, ''),
-        ('--overwrite_tensors', int, 0, ''),
         ('--drop_text', float, .2, ''),
         ('--drop_text_lstm', float, .3, ''),
         ('--text_lr', float, 1e-3, ''),
@@ -834,14 +834,9 @@ if __name__ == '__main__':
         ('--lstm_units_audio', int, 32, ''),
         ('--drop_audio', float, .2, ''),
         ('--drop_audio_lstm', float, .3, ''),
+        ('--drop_within_multi', float, .2, ''),
         ('--audio_lr', float, 1e-3, ''),
-        ('--filters_audio', int,50, ''),
-    
-        ('--overwrite_mfb_csd', int,0, ''),
-
-        ('--mode',str,'train', 'train or inference'),
-        ('--keys_path',str,join(ie_path, 'keys.json'), 'path to json file with keys "train" and "test" which each contain nonoverlapping video/utterance key lists'),
-
+        ('--filters_audio', int, 50, ''),
     ]
     for param in params:
         parser.register_parameter(*param)
@@ -860,7 +855,7 @@ if __name__ == '__main__':
 
     if args['tensors_path'] == 'unique':
         hash_object = hashlib.sha512(str(int(np.random.random()*1000)).encode("utf-8"))
-        args['tensors_path'] = join(args['data_path'], str(hash_object.hexdigest())[:10])
+        args['tensors_path'] = join(tensors_base_path, str(hash_object.hexdigest())[:10])
 
     out_dir = 'output/'
     mkdirp(out_dir)
@@ -880,8 +875,8 @@ if __name__ == '__main__':
         full_res = {k:ar(v) for k,v in full_res.items()}
         full_res['train_keys'] = args['train_keys']
         full_res['test_keys'] = args['test_keys']
-        save_json(join(out_dir, args['results_path']), full_res)
+        save_json(join(out_dir, 'results.txt'), full_res)
 
     else:
         full_res = main_inference(args)
-        save_pk(join(out_dir, args['inf_path']), full_res)
+        save_pk(join(out_dir, 'inference.pk'), full_res)

@@ -2,6 +2,8 @@ results/*
 output/*
 __pycache__/*
 data/iemocap/wavs
+data/iemocap/mfb.csd
+data/iemocap/mfb.pk
 
 models/*
 tensors/*
