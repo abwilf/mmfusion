@@ -176,10 +176,14 @@ Results of grid search:
 0  0.6885                1        text
 ```
 
+### Notes:
+* The `--seq_len` flag controls the max sequence length during alignment.  If `text` is one of the modalities, `seq_len` is the max number of words per utterance (wrapped if more, padded if less). If only audio, this controls the max number of mfbs to allow per utterance.  When involving text, `seq_len=50` is usually sufficient, but only audio should be more like `250`, as mfbs are sampled every .1 seconds.
+* When grid searching, make sure to use tensors_path=unique so the different runs don't alter each other's data.
 
-### Roadmap (to be implemented)
+## Roadmap (to be implemented)
 * HFFN inference
 * FMT support for within utterance classification
+* MOSEI links
 
 ## Credits
 Made for and with support of the CHAI Lab at the University of Michigan, advised by Professor Emily Mower Provost. The HFFN code (`hffn.py` and `util_function.py`) came from Mai et al., the [MMSDK](https://github.com/A2Zadeh/CMU-MultimodalSDK) from Zadeh et al.
