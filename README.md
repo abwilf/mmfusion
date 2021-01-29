@@ -179,6 +179,7 @@ Results of grid search:
 ### Notes:
 * The `--seq_len` flag controls the max sequence length during alignment.  If `text` is one of the modalities, `seq_len` is the max number of words per utterance (wrapped if more, padded if less). If only audio, this controls the max number of mfbs to allow per utterance.  When involving text, `seq_len=50` is usually sufficient, but only audio should be more like `250`, as mfbs are sampled every .1 seconds.
 * When grid searching, make sure to use tensors_path=unique so the different runs don't alter each other's data.
+* Transcripts files **must** end in `.pk`.
 
 ## Roadmap (to be implemented)
 * HFFN inference
