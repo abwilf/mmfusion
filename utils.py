@@ -1,3 +1,4 @@
+# general util functions
 import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit
 import pandas as pd
 import numpy as np
@@ -5,10 +6,7 @@ from glob import glob
 from os.path import join, exists, isdir
 from tqdm import tqdm
 from itertools import product
-# from ModelTexter import Texter
 from datetime import datetime
-gpu_log_path = '/z/abwilf/hffn/gpu_log.json'
-# t = Texter()
 
 def init_except_hook(gpu_id=None, filename=None, test=False):
     def my_except_hook(exctype, value, traceback):

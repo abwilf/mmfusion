@@ -1,3 +1,4 @@
+# Used to generate grid search
 SG_PATH = '/z/abwilf/Standard-Grid'
 import sys
 sys.path.append(SG_PATH)

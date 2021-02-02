@@ -1,4 +1,4 @@
-
+# util functions for HFFN
 import tensorflow as tf
 from tensorflow.keras.layers import Layer, Reshape
 from tensorflow.keras.activations import *

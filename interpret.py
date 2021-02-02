@@ -1,3 +1,4 @@
+# Interprets results of grid search
 import sys
 sys.path.append('/z/abwilf/Standard-Grid')
 import standard_grid

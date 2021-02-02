@@ -1,3 +1,4 @@
+# HFFN module called by main
 from utils import *
 from consts import *
 sys.path.append(MMSDK_PATH)

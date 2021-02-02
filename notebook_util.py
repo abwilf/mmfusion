@@ -1,3 +1,4 @@
+# Util file for gpu usage
 from utils import *
 import subprocess, re, os, sys
 import random

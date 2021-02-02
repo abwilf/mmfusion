@@ -1,3 +1,4 @@
+# Starts the clock on the grid search.  If you call python3 status.py $hash, it will return the ETA
 import sys
 sys.path.append('/z/abwilf/Standard-Grid')
 import standard_grid
