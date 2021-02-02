@@ -177,7 +177,7 @@ Results of grid search:
 ```
 
 ### Notes
-* **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
+* **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` in `main.py` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
     
 Here is the definition for `label_map_fn`:
 ```python
