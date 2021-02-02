@@ -24,7 +24,7 @@ pip install -r requirements.txt
 * [Standard-Grid](https://github.com/abwilf/standard-grid)
 * [CMU-MultimodalSDK](https://github.com/A2Zadeh/CMU-MultimodalSDK/)
 
-Modify `consts.py` to reflect these paths
+Modify `consts.py` to reflect the paths you've chosen
 ```python
 STANDARD_GRID_PATH = '/z/abwilf/Standard-Grid/'
 MMSDK_PATH = '/z/abwilf/CMU-MultimodalSDK/'
@@ -76,7 +76,7 @@ So far, we've classified each utterance independently from neighboring utterance
 python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
 ```
 
-We can specify train/test keys the same way, but it is important to note that **the keys must now be video ids instead of utterance ids**. See `data/iemocap/vid_keys.json` vs `data/iemocap/utt_keys.json` for the difference.
+We can specify train/test keys the same way, but it is important to note that **the keys must now be video ids instead of utterance ids**. See `data/iemocap/vid_keys.json` vs `data/iemocap/utt_keys.json` for an example of the difference. A note on terminology: we use the term "video" to describe a temporally ordered grouping of utterances - the visual modality does not need to be present.
 ```
 python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/vid_keys.json
 ```
@@ -176,7 +176,7 @@ Results of grid search:
 0  0.6885                1        text
 ```
 
-### Notes:
+### Notes
 * **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
     
 Here is the definition for `label_map_fn`:
@@ -209,6 +209,8 @@ If you would like to use vscode to debug, here is a `launch.json` file you can u
 * When grid searching, make sure to use tensors_path=unique so the different runs don't alter each other's data.
 * Transcripts files **must** end in `.pk`.
 * For a full list of arguments accepted by `main.py`, run `python3 main.py --help` or look at the bottom of the file where the arguments and their descriptions are defined.
+* In the transcripts and labels files, `intervals` are measured in seconds
+* To change how MFBs are extracted, see the `mfb_util.py` file and modify the global variables there.
 
 ## Roadmap (to be implemented)
 * HFFN inference

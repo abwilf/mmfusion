@@ -20,7 +20,6 @@ def resampleAudioFile(inFile, outFile, outFs):
 def normAudioAmplitude(sig):
     return sig.astype(np.float)/-np.iinfo(np.int16).min
 
-
 def new_get_mfbs(wav_file):
     y, sr = librosa.load(wav_file, sr=SR)
     y = librosa.effects.preemphasis(y, coef=0.97)

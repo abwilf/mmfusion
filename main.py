@@ -390,7 +390,7 @@ def train_within_multi(train,test):
     model = Model({'text': text_input, 'audio': audio_input}, clf)
     
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=1e-3),
+        optimizer=tf.keras.optimizers.Adam(lr=args['multi_lr']),
         loss='sparse_categorical_crossentropy',
         weighted_metrics=['sparse_categorical_accuracy'],
     )
@@ -825,18 +825,19 @@ if __name__ == '__main__':
         ('--seq_len', int, 50, 'The max sequence length.  If involving text, this will mean max number of words per utterance.  If involving only audio, this will be the max number of mfbs.'),
         ('--bs', int, 10, 'Batch size'),
 
-        ('--lstm_units_text', int, 32, ''),
-        ('--drop_text', float, .2, ''),
-        ('--drop_text_lstm', float, .3, ''),
-        ('--text_lr', float, 1e-3, ''),
-        ('--filters_text', int,50, ''),
+        ('--lstm_units_text', int, 32, 'Number of units used in text lstm'),
+        ('--drop_text', float, .2, 'Dropout rate for text'),
+        ('--drop_text_lstm', float, .3, 'Dropout rate for text lstm'),
+        ('--text_lr', float, 1e-3, 'Learning rate for text'),
+        ('--filters_text', int,50, 'Number of filters used for cross utterance text conv layers'),
     
-        ('--lstm_units_audio', int, 32, ''),
-        ('--drop_audio', float, .2, ''),
-        ('--drop_audio_lstm', float, .3, ''),
-        ('--drop_within_multi', float, .2, ''),
-        ('--audio_lr', float, 1e-3, ''),
-        ('--filters_audio', int, 50, ''),
+        ('--drop_audio', float, .2, 'Dropout rate for audio'),
+        ('--drop_audio_lstm', float, .3, 'Dropout rate for audio lstm'),
+        ('--audio_lr', float, 1e-3, 'Audio learning rate'),
+        ('--filters_audio', int, 50, 'Number of filters for audio conv layers'),
+        
+        ('--drop_within_multi', float, .2, 'Dropout rate for within multimodal'),
+        ('--multi_lr', float, 1e-3, 'Learning rate for within multimodal')
     ]
     for param in params:
         parser.register_parameter(*param)
