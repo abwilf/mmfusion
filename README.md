@@ -35,7 +35,7 @@ BASE_PATH = '/z/abwilf/mmfusion2' # the path to this directory
 Let's start off by getting a simple **unimodal lexical classifier** working on the IEMOCAP dataset.
 
 ```
-p main.py --modality text --tensors_path tensors/tensors.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
+python3 main.py --modality text --tensors_path tensors/tensors.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
 ```
 
 You'll notice that a lot of the time was spent loading and aligning the dataset.  If you rerun the command, you'll see that we skip this step because we've cached our tensors in tensors_path.  If you don't want this to happen, use `--overwrite_tensors 1`.  If you're running a bunch of tests that involve data preprocessing and don't want to have to worry about renaming tensors each time (or having them overlap across tests), set `--tensors_path unique` and the program will choose a random hash as the tensors name.  This will be useful for us later on.
@@ -50,7 +50,7 @@ Running the program this way doesn't give you control over which portion of the 
 
 For example on IEMOCAP:
 ```
-p main.py --modality text --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/utt_keys.json
+python3 main.py --modality text --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/utt_keys.json
 ```
 
 ### Unimodal Audio Classifier
@@ -64,7 +64,7 @@ cd ../..
 
 Now we can run our unimodal acoustic classifier. 
 ```
-p main.py --modality audio --tensors_path unique --audio_path data/iemocap/mfb.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --trials 1
+python3 main.py --modality audio --tensors_path unique --audio_path data/iemocap/mfb.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --trials 1
 ```
 
 First, you'll see that we map our wav files to mfbs.  Then, we align the dataset with the labels and begin classification.  We cache mfbs, but if you'd like to overwrite them, just set `--overwrite_mfbs 1`.
@@ -73,12 +73,12 @@ First, you'll see that we map our wav files to mfbs.  Then, we align the dataset
 So far, we've classified each utterance independently from neighboring utterances.  However, utterances take place within the context of a larger conversation.  We'll leverage that here with a **cross utterance unimodal lexical classifier**.
 
 ```
-p main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
+python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
 ```
 
 We can specify train/test keys the same way, but it is important to note that **the keys must now be video ids instead of utterance ids**. See `data/iemocap/vid_keys.json` vs `data/iemocap/utt_keys.json` for the difference.
 ```
-p main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/vid_keys.json
+python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/vid_keys.json
 ```
 
 ### Multimodal Classification
@@ -86,12 +86,12 @@ So far, we've only performed unimodal classification on audio xor text.  Now, we
 
 To perform **within-utterance multimodal classification**, we'll modify `--modality` to contain `audio,text` (order doesn't matter) while keeping `--cross_utterance 0`.
 ```
-p main.py --modality audio,text --cross_utterance 0 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
+python3 main.py --modality audio,text --cross_utterance 0 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
 ```
 
 We can get significant performance improvements by using HFFN to implement **cross-utterance multimodal classification**.
 ```
-p main.py --modality audio,text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
+python3 main.py --modality audio,text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
 ```
 
 ### Inference
@@ -131,18 +131,18 @@ The required format for **audio** is a wav directory where the same video keys f
 
 We'll first train a model, which is saved by default in `models/` (you can modify this with the `--model_path` flag).
 ```
-p main.py --mode train --modality audio,text --cross_utterance 0 --tensors_path tensors/tensors_inf.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
+python3 main.py --mode train --modality audio,text --cross_utterance 0 --tensors_path tensors/tensors_inf.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
 ```
 
 To run inference from some `labels_path`, `transcripts_path`, and/or `audio_path`, set the `--mode inference` flag and the output will be sent to `inference.pk`.  For example:
 
 ```
-p main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
+python3 main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
 ```
 
 As a sanity check on whether the model is performing as we think it should, we can add `--evaluate_inference 1`, which treats the labels passed in as real (not dummy) and evaluates the saved model on those labels.
 ```
-p main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1 --evaluate_inference 1
+python3 main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1 --evaluate_inference 1
 ```
 
 ### Grid Searches
@@ -177,9 +177,38 @@ Results of grid search:
 ```
 
 ### Notes:
+* **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
+    
+Here is the definition for `label_map_fn`:
+```python
+def label_map_fn(labels):
+    '''
+    input: a one-dimensional array of labels (e.g., shape (10,...))
+    output: a one-dimensional array of labels as integers
+    '''
+```
+
+If you would like to use vscode to debug, here is a `launch.json` file you can use to start the debugger. If you haven't done this before, you'll need to select your python interpreter as the one tied to the `conda` environment you're using.
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": ["--cross_utterance=0", "--modality=text", "--tensors_path=unique", "--seq_len=50", "--keys_path=data/iemocap/utt_keys.json"]
+        }
+    ]
+}
+```
+
 * The `--seq_len` flag controls the max sequence length during alignment.  If `text` is one of the modalities, `seq_len` is the max number of words per utterance (wrapped if more, padded if less). If only audio, this controls the max number of mfbs to allow per utterance.  When involving text, `seq_len=50` is usually sufficient, but only audio should be more like `250`, as mfbs are sampled every .1 seconds.
 * When grid searching, make sure to use tensors_path=unique so the different runs don't alter each other's data.
 * Transcripts files **must** end in `.pk`.
+* For a full list of arguments accepted by `main.py`, run `python3 main.py --help` or look at the bottom of the file where the arguments and their descriptions are defined.
 
 ## Roadmap (to be implemented)
 * HFFN inference
