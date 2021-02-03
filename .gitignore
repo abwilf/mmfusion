@@ -7,7 +7,7 @@ data/iemocap/mfb.pk
 data/uni.pk
 data/iemocap/ie_wavs.tar
 data/iemocap/mfb*
-
+data/mosei
 models/*
 tensors/*
 .*.pkl

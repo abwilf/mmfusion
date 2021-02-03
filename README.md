@@ -176,6 +176,41 @@ Results of grid search:
 0  0.6885                1        text
 ```
 
+### Other Datasets
+To train / test models on **MOSEI**, first download the data
+```
+cd data
+gdown https://drive.google.com/uc?id=12mJyK7w9NLJ88q7FHy2vtkT4pKqnzL5S
+tar -xvf mosei.tar
+rm mosei.tar
+cd ..
+```
+
+Train a model
+```
+python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --tensors_path tensors/mosei_text.pk --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --trials 1 --mode train
+```
+
+Realistically, you would probably want to run inference on an unseen test set, but if you'd like, you can run inference on the whole dataset like this.
+```
+python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --mode inference
+```
+
+Since we are passing in real labels, we can set the `--evaluate_inference` flag and see how we would perform on the full dataset.  Again, this is not a realistic test, because we trained on a significant part of this dataset.  This is just to demonstrate how you would run inference on a dataset you choose to pass in.
+```
+python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --mode inference --evaluate_inference 1
+```
+
+This model only includes the text modality, as the audio files for MOSEI are quite large (14G).  If you would like those, you can download them here.
+
+```
+cd data/mosei
+gdown https://drive.google.com/uc?id=1gslTSa9O9UbACuPWc-lAE770GyxsjI-c
+tar -xvf mosei_wavs.tar
+rm mosei_wavs.tar
+cd ../..
+```
+
 ### Notes
 * **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` in `main.py` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
     
@@ -211,6 +246,7 @@ If you would like to use vscode to debug, here is a `launch.json` file you can u
 * For a full list of arguments accepted by `main.py`, run `python3 main.py --help` or look at the bottom of the file where the arguments and their descriptions are defined.
 * In the transcripts and labels files, `intervals` are measured in seconds
 * To change how MFBs are extracted, see the `mfb_util.py` file and modify the global variables there.
+* When grid searching (especially on audio classification tasks), watch out for the number of parallel threads you run per GPU.  The tensors are very large, and you may encounter OOM errors.  If this happens, simply set `num_parallel` in `generate.py` to 1. For details on this behavior, see the [Standard-Grid](https://github.com/abwilf/standard-grid) repository.
 
 ## Roadmap (to be implemented)
 * HFFN inference

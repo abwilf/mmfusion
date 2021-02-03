@@ -6,11 +6,10 @@ import subprocess
 
 n_mels = 40
 n_fft = 2048
-hop_length = 160
+hop_length = 160 # mfbs are extracted in intervals of .1 second
 fmin = 0
 fmax = None
 SR = 16000
-MFB_WIN_STEP = 0.01
 n_iter = 32
 
 def resampleAudioFile(inFile, outFile, outFs):
