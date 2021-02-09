@@ -1,25 +1,11 @@
-import azure.cognitiveservices.speech as speechsdk
 from utils import *
+from consts import *
+import azure.cognitiveservices.speech as speechsdk
 
-# create a cognitive services resouce on azure, select 
-# cognitive_key = '1f57046b9db6453684916bd00fddd6ce'
-# service_region = 'eastus'
-
-# emily grant
-cognitive_key = '3b02f4c5953546d6944a0eccaed9a4bf'
-service_region = 'eastus'
-
-# cognitive_key = '5100ec9ba72a498cbe77ff5ac9df4905'
-# service_region = 'westus'
-
+cognitive_key, service_region = LD(load_json(join(BASE_PATH, 'azure_secrets.json')))[['cognitive_key', 'service_region']]
 speech_config = speechsdk.SpeechConfig(subscription=cognitive_key, region=service_region)
 speech_config.set_service_property(name='format', value='detailed', channel=speechsdk.ServicePropertyChannel.UriQueryParameter)
 speech_config.request_word_level_timestamps()
-
-# initial_silence_timeout = 6 # seconds
-# end_silence_timeout = 6
-# speech_config.set_service_property(name='initialSilenceTimeoutMs', value=str(initial_silence_timeout*1e3), channel=speechsdk.ServicePropertyChannel.UriQueryParameter)
-# speech_config.set_service_property(name='endSilenceTimeoutMs', value=str(end_silence_timeout*1e3), channel=speechsdk.ServicePropertyChannel.UriQueryParameter)
 
 def get_transcript(wav_path):
     audio_config = speechsdk.audio.AudioConfig(filename=wav_path)
@@ -54,8 +40,9 @@ def get_transcript(wav_path):
             print('Error details: {}'.format(cancellation_details.error_details))
         assert False
     
-    return features, intervals, confidence
+    return np.expand_dims(features, axis=-1), intervals, confidence
 
-path = 'blah3.wav'
-print(get_transcript(path))
-# save_pk('/z/abwilf/mmfusion/blah.pk', get_transcript(path))
+# # path = 'test_wavs/test.wav'
+# path='/z/abwilf/mmfusion2/temp_wavs/test__-__2.wav'
+# print(get_transcript(path))
+# # save_pk('/z/abwilf/mmfusion/blah.pk', get_transcript(path))

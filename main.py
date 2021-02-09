@@ -248,8 +248,20 @@ def load_data():
     )[0]
 
     if args['cross_utterance']:
-        print('Reshaping data as cross utterance...')
-        ## reshape dataset into (num_vids, max_utts, 128, 512)
+        print('Reshaping data as cross utterance in the shape (num_vids, max_utts, 128, 512)...')
+
+        if args['mode'] == 'inference': # sort by utt_id from VAD split
+            idxs = np.argsort(np.squeeze(tensors['ids']))
+            for k in tensors.keys():
+                tensors[k] = tensors[k][idxs]
+
+            def f(elt):
+                vid = elt.split(convert.DS_SEP)[0]
+                utt = elt.split(convert.DS_SEP)[1].split('[')[0]
+                return f'{vid}[{utt}]'
+
+            tensors['ids'] = arlmap(f, np.squeeze(tensors['ids']))
+        
         b = [(elt.split('[')[0], int(elt.split('[')[1].replace(']', '')), idx) for idx,elt in enumerate(np.squeeze(tensors['ids']))]
         b.sort(key=lambda elt: (elt[0], elt[1]))
         vid_keys,utt_idxs,full_idxs = lzip(*b)
@@ -259,12 +271,12 @@ def load_data():
         vid_keys = ar(vid_keys)
         unique_vid_keys = np.unique(vid_keys)
 
-        if args['train_keys'] is None:
-            args['train_keys'], args['test_keys'] = train_test_split(unique_vid_keys, test_size=.2, random_state=11)
-
         if args['mode'] == 'inference':
             args['test_keys'] = np.squeeze(unique_vid_keys)
             args['train_keys'] = ar([])
+
+        elif args['train_keys'] is None:
+            args['train_keys'], args['test_keys'] = train_test_split(unique_vid_keys, test_size=.2, random_state=11)
 
         train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], unique_vid_keys))[0]
         test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], unique_vid_keys))[0]
@@ -295,12 +307,16 @@ def load_data():
             utt_masks.append(utt_mask)
         
         # get text in sentence form: (num_vids, max_utts)
-        text = np.apply_along_axis(lambda row: b' '.join(row), -1, text)
+        text = np.apply_along_axis(lambda row: b' '.join(row) if 'S' in str(row.dtype) else b' '.join(lmap(lambda elt: elt.encode('ascii'), row)), -1, text)
         v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
         text = v(text)
         
         del tensors # GPU memory
         del dataset
+
+        if fake_labels:
+            modality = text if text.shape != () else audio
+            labels = np.ones(ar(modality).shape[0:2])
 
         if 'text' in args['modality']:
             print('Loading bert model and converting words to embeddings...')
@@ -313,21 +329,26 @@ def load_data():
                 utts = utts[:num_utts]
                 text_preprocessed = bert_preprocess_model(utts)
                 encoded = bert_model(text_preprocessed)['sequence_output'].numpy()
+
+                num_words = np.sum(text_preprocessed['input_mask'], axis=-1)
+                for i,num_word in enumerate(num_words):
+                    encoded[i, num_word:, :] = 0
+
                 encoded = np.pad(encoded, ((0, max_utts-num_utts), (0,0), (0,0)), 'constant')
                 new_data.append(encoded)
             text = ar(new_data)
 
         if 'audio' in args['modality'] and 'text' in args['modality']:
-            train = ar(audio)[train_idxs], ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs]
-            test = ar(audio)[test_idxs], ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs]
+            train = ar(audio)[train_idxs], ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
+            test = ar(audio)[test_idxs], ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
 
         elif 'audio' in args['modality']:
-            train = ar(audio)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs]
-            test = ar(audio)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs]
+            train = ar(audio)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
+            test = ar(audio)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
 
         elif 'text' in args['modality']:
-            train = ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs]
-            test = ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs]
+            train = ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
+            test = ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
 
     else: # within utterance
         labels = label_map_fn(np.squeeze(tensors['labels'])) if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])
@@ -381,21 +402,21 @@ def load_data():
             test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
 
     if args['mode'] != 'inference':
-        print(f'Saving tensors to {args["tensors_path"]}')
+        print(f'Saving tensors to {args["tensors_path"]}.pk')
         save_pk(args['tensors_path'], (train, test))
     return train, test
     
 def train_cross_multi(train, test):
-    train_audio, train_text, train_labels, train_utt_masks = train
-    test_audio, test_text, test_labels, test_utt_masks = test
+    train_audio, train_text, train_labels, train_utt_masks, train_ids = train
+    test_audio, test_text, test_labels, test_utt_masks, test_ids = test
 
     train_cross_uni_audio(
-        train=(train_audio, train_labels, train_utt_masks), 
-        test=(test_audio, test_labels, test_utt_masks)
+        train=(train_audio, train_labels, train_utt_masks, train_ids), 
+        test=(test_audio, test_labels, test_utt_masks, train_ids)
     )
     train_cross_uni_text(
-        train=(train_text, train_labels, train_utt_masks), 
-        test=(test_text, test_labels, test_utt_masks)
+        train=(train_text, train_labels, train_utt_masks, train_ids), 
+        test=(test_text, test_labels, test_utt_masks, train_ids)
     )
 
     import hffn
@@ -471,8 +492,8 @@ def train_within_multi(train,test):
 
 
 def train_cross_uni_audio(train,test):
-    train_data, train_labels, train_utt_masks = train
-    test_data, test_labels, test_utt_masks = test
+    train_data, train_labels, train_utt_masks, train_ids = train
+    test_data, test_labels, test_utt_masks, test_ids = test
 
     input = Input(shape=(train_data.shape[1],train_data.shape[2],train_data.shape[3]))
     conv = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=3, padding='same', data_format='channels_last', dtype='float32'))(input)
@@ -515,10 +536,16 @@ def train_cross_uni_audio(train,test):
         sample_weight=test_utt_masks,
         batch_size=args['bs'],
     )
-    mkdirp(args['model_path'])
     print('Saving model...')
-    model.save(args['model_path'], include_optimizer=False)
+    if len(args['modality'].split(','))>1: # multimodal
+        hffn_save_path = join(args['hffn_path'], 'uni_audio')
+        mkdirp(hffn_save_path)
+        aux.save(hffn_save_path, include_optimizer=False)
 
+    else:
+        mkdirp(args['model_path'])
+        model.save(args['model_path'], include_optimizer=False)
+        
     uni = load_pk(args['uni_path'])
     uni = {} if uni is None else uni
     uni['audio_train'] = aux.predict(x=train_data, batch_size=10)
@@ -595,8 +622,8 @@ def train_within_uni_audio(train,test):
 
 
 def train_cross_uni_text(train,test):
-    train_data, train_labels, train_utt_masks = train
-    test_data, test_labels, test_utt_masks = test
+    train_data, train_labels, train_utt_masks, train_ids = train
+    test_data, test_labels, test_utt_masks, test_ids = test
 
     def res_block(x, filters):
         x_skip = x
@@ -658,9 +685,15 @@ def train_cross_uni_text(train,test):
         sample_weight=test_utt_masks,
         batch_size=args['bs'],
     )
-    mkdirp(args['model_path'])
     print('Saving model...')
-    model.save(args['model_path'], include_optimizer=False)
+    if len(args['modality'].split(','))>1: # multimodal
+        hffn_save_path = join(args['hffn_path'], 'uni_text')
+        mkdirp(hffn_save_path)
+        aux.save(hffn_save_path, include_optimizer=False)
+
+    else:
+        mkdirp(args['model_path'])
+        model.save(args['model_path'], include_optimizer=False)
 
     uni = load_pk(args['uni_path'])
     uni = {} if uni is None else uni
@@ -792,16 +825,14 @@ def main_inference(args_in):
         if len(args['modality'].split(','))>1: # multimodal
             test_audio, test_text, test_labels, ids = test
             if args['evaluate_inference']:
-                preds = model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
-            else:
-                preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
+                model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
+            preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
 
         else:
             test_data, test_labels, ids = test
             if args['evaluate_inference']:
-                preds = model.evaluate(test_data, test_labels, batch_size=args['bs'])
-            else:
-                preds = model.predict(test_data)
+                model.evaluate(test_data, test_labels, batch_size=args['bs'])
+            preds = model.predict(test_data)
 
     else:
         model.compile(
@@ -812,28 +843,50 @@ def main_inference(args_in):
         )
         max_utts = model._build_input_shape[1] #56 for iemocap
         if len(args['modality'].split(','))>1: # multimodal
-            test_audio, test_text, test_labels, test_utt_masks = test
-            if args['evaluate_inference']:
-                preds = model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
-            else:
-                preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
+            test_audio, test_text, test_labels, test_utt_masks, ids = test
 
+            print('Loading models for HFFN inference...')
+            uni_text_model = tf.keras.models.load_model(join(args['hffn_path'], 'uni_text'))
+            uni_audio_model = tf.keras.models.load_model(join(args['hffn_path'], 'uni_audio'))
+            
+            uni = {
+                'text': uni_text_model.predict(x=test_text, batch_size=10),
+                'audio': uni_audio_model.predict(x=test_audio, batch_size=10),
+                'mask': test_utt_masks,
+                'label': test_labels
+            }
+
+            import hffn
+            preds = hffn.inference(uni, args)
+            
         else:
-            test_data, test_labels, test_utt_masks = test
+            test_data, test_labels, test_utt_masks, ids = test
             if args['evaluate_inference']:
-                preds = model.evaluate(test_data, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
-            else:
-                preds = model.predict(test_data)
+                model.evaluate(test_data, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
+            preds = model.predict(test_data)
     
-    a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
-    label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
-    reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+    ## uncomment to print predictions for iemocap label scheme
     
-    for i,id in enumerate(ids):
-        id = id.split('[')[0]
-        print('Transcript:', a[id], '; ', end='')
-        label = np.argmax(preds, axis=-1)[i]
-        print('Label:', reverse_label_map[label])
+    # a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
+    # label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
+    # reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+    # if args['cross_utterance']:
+    #     for i,vid_id in enumerate(ids):
+    #         utt_keys = np.sort(lfilter(lambda elt: vid_id in elt, lkeys(a)))
+    #         assert np.sum(test_utt_masks[i])==len(utt_keys)
+    #         for j,utt_key in enumerate(utt_keys):
+    #             print('Transcript:', a[utt_key])
+    #             label = np.argmax(preds, axis=-1)[i,j]
+    #             print('Pred:', reverse_label_map[label])
+
+    # else:
+    #     for i,id in enumerate(ids):
+    #         id = id.split('[')[0]
+    #         print('Transcript:', a[id], '; ', end='')
+    #         label = np.argmax(preds, axis=-1)[i]
+    #         print('Label:', reverse_label_map[label])
+
+    ## 
 
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
@@ -864,6 +917,7 @@ if __name__ == '__main__':
         ('--tensors_path',str, join(tensors_base_path, 'tensors.pk'), 'Where tensors will be stored for this dataset.  If "unique", will store a hash in tensors folder.'),
         ('--wav_dir',str, join(ie_path, 'wavs'), 'Path to wav dir.'),
         ('--model_path',str,join(models_path, 'model'), 'Where model will be saved.'),
+        ('--hffn_path',str,join(models_path, 'hffn'), 'Where uni text, uni audio, and hffn models will be saved.'),
         ('--uni_path',str,uni_path, 'Where unimodal activations are stored before feeding into hffn (in the case of cross utterance multimodal)'),
 
         # core options
