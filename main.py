@@ -5,6 +5,7 @@ from mmsdk import mmdatasdk
 sys.path.append(STANDARD_GRID_PATH)
 import standard_grid
 
+import copy
 import hashlib
 
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -35,12 +36,14 @@ from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.callbacks import EarlyStopping, Callback, TensorBoard
 from tensorflow.keras.activations import *
 from tensorflow.keras.regularizers import l1_l2, l2
-
-
-import tensorflow as tf
 import tensorflow_hub as hub
 import tensorflow_text as text
 # from official.nlp import optimization  # to create AdamW optmizer - only needed if fine tuning
+
+sys.path.append(DEEPSPEECH_PATH)
+import convert
+
+from transcribe import *
 
 metadata_template = { "root name": '', "computational sequence description": '', "computational sequence version": '', "alignment compatible": '', "dataset name": '', "dataset version": '', "creator": '', "contact": '', "featureset bib citation": '', "dataset bib citation": ''}
 
@@ -49,7 +52,6 @@ map_name_to_handle = { 'bert_en_uncased_L-12_H-768_A-12': 'https://tfhub.dev/ten
 map_model_to_preprocess = { 'bert_en_uncased_L-12_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'bert_en_cased_L-12_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_cased_preprocess/2', 'small_bert/bert_en_uncased_L-2_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-2_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-2_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-2_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-4_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-4_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-4_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-4_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-6_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-6_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-6_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-6_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-8_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-8_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-8_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-8_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-10_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-10_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-10_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-10_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-12_H-128_A-2': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-12_H-256_A-4': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-12_H-512_A-8': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'small_bert/bert_en_uncased_L-12_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'bert_multi_cased_L-12_H-768_A-12': 'https://tfhub.dev/tensorflow/bert_multi_cased_preprocess/2', 'albert_en_base': 'https://tfhub.dev/tensorflow/albert_en_preprocess/2', 'electra_small': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'electra_base': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'experts_pubmed': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'experts_wiki_books': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', 'talking-heads_base': 'https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/2', }
 tfhub_handle_encoder = map_name_to_handle[bert_model_name]
 tfhub_handle_preprocess = map_model_to_preprocess[bert_model_name]
-
 
 def avg(intervals: np.array, features: np.array) -> np.array:
     try:
@@ -71,14 +73,14 @@ def add_unaligned_mfb(video_key):
         'intervals': intervals
     }
 
-def deploy_unaligned_mfb_csd():
+def deploy_unaligned_mfb_csd(check_labels=True):
     csd_name = f'mfb_temp'
 
-    labels = get_compseq(args['labels_path'], 'labels')
-    label_keys = lkeys(labels)
     wav_keys = lmap(lambda elt: elt.split('/')[-1].split('.wav')[0], glob(join(args['wav_dir'], '*.wav')))
-
-    assert subset(label_keys, wav_keys), f'The keys of the videos in the wav directory {args["wav_dir"]} must be a subset of the keys in the labels file {args["labels_path"]}. e.g.: if there exists a label with the key "abc", there should be a corresponding "abc.wav" in the wav directory'
+    if check_labels:
+        labels = get_compseq(args['labels_path'], 'labels')
+        label_keys = lkeys(labels)
+        assert subset(label_keys, wav_keys), f'The keys of the videos in the wav directory {args["wav_dir"]} must be a subset of the keys in the labels file {args["labels_path"]}. e.g.: if there exists a label with the key "abc", there should be a corresponding "abc.wav" in the wav directory'
 
     if exists(args['audio_path']) and not args['overwrite_mfbs']:
         print(f'MFBs exist in {args["audio_path"]}.  Moving on...')
@@ -106,14 +108,16 @@ def deploy_unaligned_mfb_csd():
     save_pk(args['audio_path'].replace('.csd', '.pk'), data)
     return args["audio_path"]
 
-def csd_to_pk(ds, key, path):
+def csd_to_pk(ds, key, path=None):
     new_text = {}
     for k in ds[key].keys():
         new_text[k] = {
             'features': ar(ds[key][k]['features']),
             'intervals': ar(ds[key][k]['intervals']),
         }
-    save_pk(path, new_text)
+    if path is not None:
+        save_pk(path, new_text)
+    return new_text
 
 def get_compseq(path, key_name):
     if 'pk' in path:
@@ -128,8 +132,21 @@ def get_compseq(path, key_name):
         compseq = a[key_name]
     return compseq
 
-def add_seq(dataset, path, key_name):
-    compseq = get_compseq(path,key_name)
+def get_compseq_obj(obj, key_name):
+    if type(obj) is dict:
+        compseq = mmdatasdk.computational_sequence(key_name)
+        compseq.setData(obj, key_name)
+        metadata_template['root name'] = key_name
+        compseq.setMetadata(metadata_template, key_name)
+    else:
+        compseq = obj[key_name]
+    return compseq
+
+def add_seq(dataset, obj, key_name, obj_type='path'):
+    if obj_type == 'path':
+        compseq = get_compseq(obj, key_name)
+    else:
+        compseq = get_compseq_obj(obj, key_name)
     dataset.computational_sequences[key_name] = compseq
 
 ### TODO: MODIFY ##
@@ -165,21 +182,48 @@ def load_data():
         return train, test
 
     dataset = mmdatasdk.mmdataset(recipe={'dummy': args['dummy_path']})
+    del dataset.computational_sequences['dummy']
 
+    if args['mode'] == 'inference':
+        if args['wav_dir'][-1]=='/':
+            args['wav_dir'] = args['wav_dir'][:-1]
+        temp_wav_dir = args['wav_dir']+'_segments'
+        
+        if ( not exists(args['transcripts_path']) and 'text' in args['modality'] ) or ('audio' in args['modality']):
+            convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=2)
+
+        if not exists(args['transcripts_path']) and 'text' in args['modality']:
+            assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
+
+            wav_paths = glob(join(temp_wav_dir, '*'))
+            print(f'Transcribing {args["wav_dir"]} into {temp_wav_dir}')
+            transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+            save_pk(args['transcripts_path'], transcripts)
+        
+        if 'audio' in args['modality']:
+            args['wav_dir'] = temp_wav_dir
+    
     if 'text' in args['modality']:
         add_seq(dataset, args['transcripts_path'], 'text')
     
     if 'audio' in args['modality']:
-        deploy_unaligned_mfb_csd()
+        deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
-    del dataset.computational_sequences['dummy']
+    sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be braodest
 
     if 'audio' in args['modality'] and 'text' in args['modality']:
         dataset.align('text', collapse_functions=[avg])
         dataset.impute('text')
     
-    add_seq(dataset, args['labels_path'], 'labels')
+    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
+    
+    if not fake_labels:
+        add_seq(dataset, args['labels_path'], 'labels')
+    else:
+        labels = {k: {'features': ar([[1]]), 'intervals': ar([ [sub_ds[k]['intervals'].min(), sub_ds[k]['intervals'].max()] ]) } for k in sub_ds.keys()}
+        add_seq(dataset, labels, 'labels', obj_type='obj')
+
     dataset.align('labels')
     dataset.hard_unify()
 
@@ -240,10 +284,11 @@ def load_data():
                 utt_padded_audio = np.pad(relevant_audio, ((0,max_utts-num_utts), (0,0), (0,0)), 'constant')
                 audio.append(utt_padded_audio)
 
-            relevant_labels = np.squeeze(tensors['labels'][vid_idxs]).reshape((num_utts,-1))
-            relevant_labels = label_map_fn(relevant_labels)
-            utt_padded_labels = np.pad(relevant_labels, ((0,max_utts-num_utts)), 'constant')
-            labels.append(utt_padded_labels)
+            if not fake_labels:
+                relevant_labels = np.squeeze(tensors['labels'][vid_idxs]).reshape((num_utts,-1))
+                relevant_labels = label_map_fn(relevant_labels)
+                utt_padded_labels = np.pad(relevant_labels, ((0,max_utts-num_utts)), 'constant')
+                labels.append(utt_padded_labels)
             
             utt_mask = np.ones(max_utts)
             utt_mask[num_utts:] = 0
@@ -285,7 +330,8 @@ def load_data():
             test = ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs]
 
     else: # within utterance
-        labels = label_map_fn(np.squeeze(tensors['labels']))
+        labels = label_map_fn(np.squeeze(tensors['labels'])) if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])
+        ids = np.squeeze(tensors['ids'])
 
         if args['train_keys'] is None:
             args['train_keys'], args['test_keys'] = train_test_split(np.squeeze(tensors['ids']), test_size=.2, random_state=11)
@@ -299,7 +345,7 @@ def load_data():
         assert len(train_idxs) + len(test_idxs) == len(tensors['ids']), 'If this assertion fails, it means not all utterance keys were accounted for in the keys provided'
     
         if 'text' in args['modality']:
-            text = np.apply_along_axis(lambda row: b' '.join(row), -1, np.squeeze(tensors['text']))
+            text = np.apply_along_axis(lambda row: b' '.join(row) if 'S' in str(row.dtype) else b' '.join(lmap(lambda elt: elt.encode('ascii'), row)), -1, np.squeeze(tensors['text']))
             v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
             text = v(text)
 
@@ -323,16 +369,16 @@ def load_data():
             audio = tensors['audio']
 
         if 'text' in args['modality'] and 'audio' not in args['modality']:
-            train = text[train_idxs], labels[train_idxs]
-            test = text[test_idxs], labels[test_idxs]
+            train = text[train_idxs], labels[train_idxs], ids[train_idxs]
+            test = text[test_idxs], labels[test_idxs], ids[test_idxs]
 
         elif 'audio' in args['modality'] and 'text' not in args['modality']:
-            train = audio[train_idxs], labels[train_idxs]
-            test = audio[test_idxs], labels[test_idxs]
+            train = audio[train_idxs], labels[train_idxs], ids[train_idxs]
+            test = audio[test_idxs], labels[test_idxs], ids[test_idxs]
         
         else: # both
-            train = text[train_idxs], audio[train_idxs], labels[train_idxs]
-            test = text[test_idxs], audio[test_idxs], labels[test_idxs]
+            train = text[train_idxs], audio[train_idxs], labels[train_idxs], ids[train_idxs]
+            test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
 
     if args['mode'] != 'inference':
         print(f'Saving tensors to {args["tensors_path"]}')
@@ -358,8 +404,8 @@ def train_cross_multi(train, test):
 
 
 def train_within_multi(train,test):
-    train_audio, train_text, train_labels = train
-    test_audio, test_text, test_labels = test
+    train_audio, train_text, train_labels, train_ids = train
+    test_audio, test_text, test_labels, test_ids = test
 
     dropout=args['drop_within_multi']
     TD = TimeDistributed
@@ -493,10 +539,9 @@ def train_cross_uni_audio(train,test):
     }
     return res
 
-
 def train_within_uni_audio(train,test):
-    train_data, train_labels = train
-    test_data, test_labels = test
+    train_data, train_labels, train_ids = train
+    test_data, test_labels, test_ids = test
 
     input = Input(shape=(train_data.shape[1],train_data.shape[2]))
     conv = Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=3, padding='same', data_format='channels_last', dtype='float32')(input)
@@ -638,8 +683,8 @@ def train_cross_uni_text(train,test):
     return res
 
 def train_within_uni_text(train, test):
-    train_data, train_labels = train
-    test_data, test_labels = test
+    train_data, train_labels, train_ids = train
+    test_data, test_labels, test_ids = test
 
     def res_block(x, filters):
         x_skip = x
@@ -745,14 +790,14 @@ def main_inference(args_in):
 
         # max_utts = model._build_input_shape[1] #56 for iemocap
         if len(args['modality'].split(','))>1: # multimodal
-            test_audio, test_text, test_labels = test
+            test_audio, test_text, test_labels, ids = test
             if args['evaluate_inference']:
                 preds = model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
             else:
                 preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
 
         else:
-            test_data, test_labels = test
+            test_data, test_labels, ids = test
             if args['evaluate_inference']:
                 preds = model.evaluate(test_data, test_labels, batch_size=args['bs'])
             else:
@@ -780,10 +825,21 @@ def main_inference(args_in):
             else:
                 preds = model.predict(test_data)
     
+    a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
+    label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
+    reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+    
+    for i,id in enumerate(ids):
+        id = id.split('[')[0]
+        print('Transcript:', a[id], '; ', end='')
+        label = np.argmax(preds, axis=-1)[i]
+        print('Label:', reverse_label_map[label])
+
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
         'utt_masks': None if not args['cross_utterance'] else test_utt_masks,
         'predictions': preds,
+        'ids': ids,
     }
     return full_res
 
@@ -821,7 +877,7 @@ if __name__ == '__main__':
 
         # hyperparameters
         ('--epochs', int, 500, ''),
-        ('--trials', int, 2, 'Number of trials you want to run.  All results will be saved and appended, and the model from the last trial will be saved. This is useful if there is variability in how well your model performs, so you can build performance statistics across trials.'),
+        ('--trials', int, 1, 'Number of trials you want to run.  All results will be saved and appended, and the model from the last trial will be saved. This is useful if there is variability in how well your model performs, so you can build performance statistics across trials.'),
         ('--seq_len', int, 50, 'The max sequence length.  If involving text, this will mean max number of words per utterance.  If involving only audio, this will be the max number of mfbs.'),
         ('--bs', int, 10, 'Batch size'),
 
@@ -844,6 +900,7 @@ if __name__ == '__main__':
 
     args = vars(parser.compile_argparse())
 
+    assert args['mode'] in ['train', 'inference']
     keys = load_json(args['keys_path'])
     if keys is not None:
         args['train_keys'], args['test_keys'] = LD(keys)[['train_keys', 'test_keys']]

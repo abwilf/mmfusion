@@ -11,6 +11,7 @@ fmin = 0
 fmax = None
 SR = 16000
 n_iter = 32
+MFB_WIN_STEP = .01
 
 def resampleAudioFile(inFile, outFile, outFs):
     cmdParts = ['sox', inFile, '-r', str(outFs), outFile]
