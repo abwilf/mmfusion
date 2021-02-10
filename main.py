@@ -198,6 +198,29 @@ def load_data():
             wav_paths = glob(join(temp_wav_dir, '*'))
             print(f'Transcribing {args["wav_dir"]} into {temp_wav_dir}')
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+
+            # remove wav_segments that have no recognized speech
+            no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]
+            for elt in no_recognized:
+                rmfile(join(temp_wav_dir, f'{elt}.wav'))
+
+            # rename rest
+            unique_videos = set(lmap(lambda elt: elt.split('/')[-1].replace('.wav', '').split(convert.DS_SEP)[0], glob(join(temp_wav_dir, '*.wav'))))
+            for vid in unique_videos:
+                recognized = [k for k,v in transcripts.items() if len(v['features'])>0 and k.split(convert.DS_SEP)[0] == vid]
+                recognized = sorted(recognized, key=lambda elt: int(elt.split(convert.DS_SEP)[1]))
+                idxs = np.arange(len(recognized))
+                
+                x = [(k,f'{k.split(convert.DS_SEP)[0]}{convert.DS_SEP}{idx}') for k,idx in zip(recognized, idxs)]
+
+                # move wavs, transcripts keys
+                for orig, new in x:
+                    shutil.move(join(temp_wav_dir, f'{orig}.wav'), join(temp_wav_dir, f'{new}.wav'))
+                    transcripts[new] = transcripts[orig]
+                    if new != orig:
+                        del transcripts[orig]
+
+            # transcripts = {k:v for k,v in transcripts.items() if len(v['features'])>0}
             save_pk(args['transcripts_path'], transcripts)
         
         if 'audio' in args['modality']:
@@ -210,7 +233,7 @@ def load_data():
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
-    sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be braodest
+    sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be broadest
 
     if 'audio' in args['modality'] and 'text' in args['modality']:
         dataset.align('text', collapse_functions=[avg])
@@ -468,7 +491,7 @@ def train_within_multi(train,test):
         batch_size=10,
         epochs=500,
         validation_split=0.2,
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=20)],
+        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=20, restore_best_weights=True)],
         verbose=1,
     ).history
     eval_history = model.evaluate(
@@ -528,7 +551,7 @@ def train_cross_uni_audio(train,test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_split=0.15,
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30)],
+        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -599,7 +622,7 @@ def train_within_uni_audio(train,test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_split=0.15,
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30)],
+        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -677,7 +700,7 @@ def train_cross_uni_text(train,test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_split=0.15,
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30)],
+        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=30, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -762,7 +785,7 @@ def train_within_uni_text(train, test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_split=0.15,
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=10)],
+        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=10, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -811,7 +834,6 @@ def main_inference(args_in):
 
     _, test = load_data() # only consider test data with dummy labels
 
-    print('Loading classifier...')
     model = tf.keras.models.load_model(args['model_path'])
     print('Predicting...')
     if not args['cross_utterance']: # within
@@ -865,28 +887,25 @@ def main_inference(args_in):
                 model.evaluate(test_data, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
             preds = model.predict(test_data)
     
-    ## uncomment to print predictions for iemocap label scheme
-    
-    # a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
-    # label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
-    # reverse_label_map = ['ang', 'hap', 'neu', 'sad']
-    # if args['cross_utterance']:
-    #     for i,vid_id in enumerate(ids):
-    #         utt_keys = np.sort(lfilter(lambda elt: vid_id in elt, lkeys(a)))
-    #         assert np.sum(test_utt_masks[i])==len(utt_keys)
-    #         for j,utt_key in enumerate(utt_keys):
-    #             print('Transcript:', a[utt_key])
-    #             label = np.argmax(preds, axis=-1)[i,j]
-    #             print('Pred:', reverse_label_map[label])
+    if args['print_transcripts']:
+        a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
+        label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
+        reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+        if args['cross_utterance']:
+            for i,vid_id in enumerate(ids):
+                utt_keys = np.sort(lfilter(lambda elt: vid_id in elt, lkeys(a)))
+                assert np.sum(test_utt_masks[i])==len(utt_keys)
+                for j,utt_key in enumerate(utt_keys):
+                    print('Transcript:', a[utt_key])
+                    label = np.argmax(preds, axis=-1)[i,j]
+                    print('Pred:', reverse_label_map[label])
 
-    # else:
-    #     for i,id in enumerate(ids):
-    #         id = id.split('[')[0]
-    #         print('Transcript:', a[id], '; ', end='')
-    #         label = np.argmax(preds, axis=-1)[i]
-    #         print('Label:', reverse_label_map[label])
-
-    ## 
+        else:
+            for i,id in enumerate(ids):
+                id = id.split('[')[0]
+                print('Transcript:', a[id], '; ', end='')
+                label = np.argmax(preds, axis=-1)[i]
+                print('Label:', reverse_label_map[label])
 
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
@@ -928,6 +947,7 @@ if __name__ == '__main__':
         ('--overwrite_tensors', int, 0, 'Do you want to overwrite tensors in tensors_path or not?  By default, we will use tensors we find in tensors_path instead of regenerating.'),
         ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
         ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
+        ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
 
         # hyperparameters
         ('--epochs', int, 500, ''),
