@@ -922,10 +922,11 @@ def main_inference(args_in):
             for i,id in enumerate(ids):
                 id = id.split('[')[0]
                 print('Utt id:', id)
-                print('Transcript:', a[id], '; ', end='')
+                print('Transcript:', a[id])
                 label = np.argmax(preds, axis=-1)[i]
-                print('Label:', reverse_label_map[label])
-
+                print('Pred:', reverse_label_map[label])
+    
+    print('Your output will be in output/inference.pk')
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
         'utt_masks': None if not args['cross_utterance'] else test_utt_masks,

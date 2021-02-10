@@ -103,14 +103,14 @@ python3 main.py --modality audio,text --cross_utterance 1 --tensors_path unique 
 ```
 
 ### Inference
-As you train your models, they are automatically saved to `BASE_PATH/models` (`BASE_PATH` from `consts.py`). You can specify this path with the `--model_path` flag (or, in the case of cross utterance multimodal training with HFFN, with the `--hffn_path` flag, which requires that unimodal and multimodal models be created). Once a model is saved, we can use it to generate predictions by feeding in data in the correct format
+As you train your models, they are automatically saved to `BASE_PATH/models` (`BASE_PATH` from `consts.py`). You can specify this path with the `--model_path` flag (or, in the case of cross utterance multimodal training with HFFN, with the `--hffn_path` flag, which requires that unimodal and multimodal models be created). Once a model is saved, we can use it to generate predictions by feeding in data in the correct format.
 
 Let's first train a within utterance unimodal text model on IEMOCAP, saving it to `models/model`
 ```
 python3 main.py --modality text --tensors_path unique --mode train --cross_utterance 0
 ```
 
-Now, we will run inference on a wav file, `test2.wav`.  `--mode inference` will automatically transcribe the wavs in `--wav_dir` if they do not yet exist in `--transcripts_path` using the azure cognitive services credentials `azure_secrets.json`. 
+Now, we will run inference on a wav file, `test2.wav`.  `--mode inference` will automatically split the wav into sub-wavs using a voice activity detector (you can modify the aggressiveness of the detector with `--VAD_agg` - see my [deepspeech repo](https://github.com/abwilf/deepspeech) for more details) and transcribe the wavs in `--wav_dir` if they do not yet exist in `--transcripts_path` using the azure cognitive services credentials `azure_secrets.json`. 
 ```
 python3 main.py --modality text --mode inference --cross_utterance 0 --print_transcripts 1 --wav_dir demo_data/wavs --transcripts_path demo_data/transcripts.pk
 ```
@@ -124,6 +124,7 @@ load_pk('demo_data/transcripts.pk')
 
 You can run this with different `--modality` and `--cross_utterance` flags as well, provided you have previously trained a model equipped to handle the type of modality and within/cross utterance type and that model exists in `--model_path` (or `--hffn_path` if cross utterance multimodal).  Your results will be in `output/inference.pk`.
 
+A note about wavs you pass in: they must be 16khz mono 32 bit float to be compatible with the voice activity detector and azure speech-to-text.
 
 ### Grid Searches
 Grid searching over hyperparameters can be essential to maximizing performance.  With Amir Zadeh's [Standard-Grid](https://github.com/A2Zadeh/Standard-Grid) this becomes easy.  We'll be using my fork of the project to access a few nice features.
@@ -229,7 +230,6 @@ If you would like to use vscode to debug, here is a `launch.json` file you can u
 * When grid searching (especially on audio classification tasks), watch out for the number of parallel threads you run per GPU.  The tensors are very large, and you may encounter OOM errors.  If this happens, simply set `num_parallel` in `generate.py` to 1. For details on this behavior, see the [Standard-Grid](https://github.com/abwilf/standard-grid) repository.
 
 ## Roadmap (to be implemented)
-* HFFN inference
 * FMT support for within utterance classification
 * MOSEI links
 
