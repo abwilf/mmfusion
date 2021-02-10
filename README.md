@@ -31,6 +31,14 @@ MMSDK_PATH = '/z/abwilf/CMU-MultimodalSDK/'
 BASE_PATH = '/z/abwilf/mmfusion2' # the path to this directory
 ```
 
+Create and save a file called `azure_secrets.json`, with the following code inside.  If you decide to use azure for speech recognition in the future, this is where your API information will go.
+```
+{
+    "cognitive_key": "temp",
+    "service_region": "temp"
+}
+```
+
 ### Unimodal Lexical Classifier
 Let's start off by getting a simple **unimodal lexical classifier** working on the IEMOCAP dataset.
 
@@ -95,55 +103,27 @@ python3 main.py --modality audio,text --cross_utterance 1 --tensors_path unique 
 ```
 
 ### Inference
-Models are automatically saved to `BASE_PATH/models` (`BASE_PATH` from `consts.py`), but you can specify this path with the `--model_path` flag. Once a model is saved, we can use it to generate predictions by feeding in data in the correct format.
+As you train your models, they are automatically saved to `BASE_PATH/models` (`BASE_PATH` from `consts.py`). You can specify this path with the `--model_path` flag (or, in the case of cross utterance multimodal training with HFFN, with the `--hffn_path` flag, which requires that unimodal and multimodal models be created). Once a model is saved, we can use it to generate predictions by feeding in data in the correct format
 
-The required format for **label** files is:
+Let's first train a within utterance unimodal text model on IEMOCAP, saving it to `models/model`
 ```
-{'<vid_key>':
-    'features': dummy array (doesn't matter what's in here) of size (num_utterances,1),
-    'intervals': array of floats of shape (num_utterances,2) with start,end for each utterance.  this is essential to split and align the data across modalities
-}
+python3 main.py --modality text --tensors_path unique --mode train --cross_utterance 0
 ```
 
-To see an example, pop open the IEMOCAP emotion labels file.
+Now, we will run inference on a wav file, `test2.wav`.  `--mode inference` will automatically transcribe the wavs in `--wav_dir` if they do not yet exist in `--transcripts_path` using the azure cognitive services credentials `azure_secrets.json`. 
+```
+python3 main.py --modality text --mode inference --cross_utterance 0 --print_transcripts 1 --wav_dir demo_data/wavs --transcripts_path demo_data/transcripts.pk
+```
+
+The transcripts are available in the pickle file:
 ```
 python3
 from utils import *
-a = load_pk('data/iemocap/IEMOCAP_EmotionLabels.pk')
-dict_at(a)
+load_pk('demo_data/transcripts.pk')
 ```
 
-The required format for **transcript** files is
-```
-{'<vid_key>':
-    'features': array of words in the video of shape (num_words,),
-    'intervals': array of floats of shape (num_words,2) with start,end for each word
-}
-```
-For example, IEMOCAP:
-```
-from utils import *
-a = load_pk('data/iemocap/IEMOCAP_TimestampedWords.pk')
-dict_at(a)
-```
+You can run this with different `--modality` and `--cross_utterance` flags as well, provided you have previously trained a model equipped to handle the type of modality and within/cross utterance type and that model exists in `--model_path` (or `--hffn_path` if cross utterance multimodal).  Your results will be in `output/inference.pk`.
 
-The required format for **audio** is a wav directory where the same video keys from the labels are the names of the wavs. e.g.: data/iemocap/wavs
-
-We'll first train a model, which is saved by default in `models/` (you can modify this with the `--model_path` flag).
-```
-python3 main.py --mode train --modality audio,text --cross_utterance 0 --tensors_path tensors/tensors_inf.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
-```
-
-To run inference from some `labels_path`, `transcripts_path`, and/or `audio_path`, set the `--mode inference` flag and the output will be sent to `inference.pk`.  For example:
-
-```
-python3 main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
-```
-
-As a sanity check on whether the model is performing as we think it should, we can add `--evaluate_inference 1`, which treats the labels passed in as real (not dummy) and evaluates the saved model on those labels.
-```
-python3 main.py --mode inference --modality audio,text --cross_utterance 0 --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1 --evaluate_inference 1
-```
 
 ### Grid Searches
 Grid searching over hyperparameters can be essential to maximizing performance.  With Amir Zadeh's [Standard-Grid](https://github.com/A2Zadeh/Standard-Grid) this becomes easy.  We'll be using my fork of the project to access a few nice features.

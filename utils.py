@@ -159,7 +159,7 @@ def mkdirp(dir_path):
     if not os.path.isdir(dir_path):
         pathlib.Path(dir_path).mkdir(parents=True)
 
-def rm_file(file_path):
+def rmfile(file_path):
     if os.path.exists(file_path):
         os.remove(file_path)
     
@@ -189,7 +189,7 @@ def list_gpus():
 
 def save_pk(file_stub, pk, protocol=4):
     filename = file_stub if '.pk' in file_stub else f'{file_stub}.pk'
-    rm_file(filename)
+    rmfile(filename)
     with open(filename, 'wb') as f:
         pickle.dump(pk, f, protocol=protocol)
     

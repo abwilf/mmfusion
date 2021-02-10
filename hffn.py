@@ -162,41 +162,54 @@ def multimodal(unimodal_activations, args):
     }
 
     unimodal_activations['train_mask'] = unimodal_activations['text_train_mask']
+    unimodal_activations['val_mask'] = unimodal_activations['text_val_mask']
     unimodal_activations['test_mask'] = unimodal_activations['text_test_mask']
+    
     unimodal_activations['train_label'] = unimodal_activations['text_train_label']
+    unimodal_activations['val_label'] = unimodal_activations['text_val_label']
     unimodal_activations['test_label'] = unimodal_activations['text_test_label']
 
     train_mask=unimodal_activations['train_mask'] # 0 or 1
-    test_mask=unimodal_activations['test_mask']
     train_label=onehot_initialization(unimodal_activations['train_label'])
+
+    val_mask=unimodal_activations['val_mask'] # 0 or 1
+    val_label=onehot_initialization(unimodal_activations['val_label'])
+    
+    test_mask=unimodal_activations['test_mask']
     test_label=onehot_initialization(unimodal_activations['test_label'])
 
     text = unimodal_activations['text_train']
     audio = unimodal_activations['audio_train']
-    fusion, _, _ = segmentation(text, audio, args['segmentation_size'], args['segmentation_stride'])
+    train_fusion, _, _ = segmentation(text, audio, args['segmentation_size'], args['segmentation_stride'])
 
+    text = unimodal_activations['text_val']
+    audio = unimodal_activations['audio_val']
+    val_fusion, _, _ = segmentation(text, audio, args['segmentation_size'], args['segmentation_stride'])
+    
     text = unimodal_activations['text_test']
     audio = unimodal_activations['audio_test']
-    fusion2, _, _ = segmentation(text, audio, args['segmentation_size'], args['segmentation_stride'])
-    fusion_shape = fusion.shape[1:]
-    
+    test_fusion, _, _ = segmentation(text, audio, args['segmentation_size'], args['segmentation_stride'])
+
+    fusion_shape = train_fusion.shape[1:]
     model = get_model(fusion_shape)
 
     print('Training hffn...')
-    early_stopping = EarlyStopping(monitor='val_categorical_accuracy', mode='max', patience=10)
+    early_stopping = EarlyStopping(monitor='val_categorical_accuracy', mode='max', patience=10, restore_best_weights=True)
     # class_weight_mask = np.argmax(train_label, axis=-1).astype('float32')
     # for class_val, weight in args['class_weights'].items():
     #     class_weight_mask[class_weight_mask==class_val] = weight
     # class_weight_mask = class_weight_mask * train_mask
 
-    train_history = model.fit(fusion, train_label,
+    train_history = model.fit(
+        train_fusion, 
+        train_label,
         epochs=args['epochs'],
         batch_size=10,
         # sample_weight=class_weight_mask if args['average_type'] == 'macro' else train_mask,
         sample_weight=train_mask,
         shuffle=True,
         callbacks=[early_stopping],
-        validation_split=0.2,
+        validation_data=(val_fusion, val_label, val_mask),
         verbose=args['verbose'],
     ).history
     
@@ -206,13 +219,13 @@ def multimodal(unimodal_activations, args):
     model.save_weights(hffn_save_path)
     
     eval_history = model.evaluate(
-        fusion2,
+        test_fusion,
         test_label,
         sample_weight=test_mask,
     )
     print(eval_history)
 
-    result = model.predict(fusion2)
+    result = model.predict(test_fusion)
     calc_test_result(result, test_label, test_mask)
     res = {
         'train_losses': ar(train_history['loss']),

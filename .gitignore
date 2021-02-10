@@ -14,3 +14,5 @@ tensors/*
 .vscode
 *secrets*
 *.ipynb
+demo/*
+demo_data2
