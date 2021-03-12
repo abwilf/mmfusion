@@ -58,7 +58,7 @@ def calc_test_result(result, test_label, test_mask):
     predicted_label=[]
     for i in range(result.shape[0]):
         for j in range(result.shape[1]):
-            if test_mask[i,j]==1:
+            if test_mask[i,j]!=0:
                 true_label.append(np.argmax(test_label[i,j] ))
                 predicted_label.append(np.argmax(result[i,j] ))
     
@@ -106,14 +106,16 @@ def get_model(fusion_shape):
     fla = TimeDistributed(Flatten())(lstm3)
     uni = TimeDistributed(Dense(50,activation='relu'))(fla)   ####50
     uni = Dropout(0.5)(uni)
-    output = TimeDistributed(Dense(4, activation='softmax'))(uni) 
+    output = TimeDistributed(Dense(args['num_labels'], activation='softmax'))(uni) 
     # output = TimeDistributed(Dense(args['train_label'].shape[-1], activation='linear'))(uni) 
 
     model = Model(input_data, output)
     model.compile(optimizer='RMSprop', loss='cosine_similarity', weighted_metrics=['categorical_accuracy'], sample_weight_mode='temporal')
     return model
 
-def inference(unimodal_activations, args):
+def inference(unimodal_activations, args_in):
+    global args
+    args = args_in
     args = {
         **args,
         'segmentation_size': 2,
@@ -147,7 +149,9 @@ def inference(unimodal_activations, args):
     return result
 
 
-def multimodal(unimodal_activations, args):
+def multimodal(unimodal_activations, args_in):
+    global args
+    args = args_in
     #Fusion (appending) of features
         #[62 63 50] [62 63 150]
 
@@ -195,17 +199,12 @@ def multimodal(unimodal_activations, args):
 
     print('Training hffn...')
     early_stopping = EarlyStopping(monitor='val_categorical_accuracy', mode='max', patience=10, restore_best_weights=True)
-    # class_weight_mask = np.argmax(train_label, axis=-1).astype('float32')
-    # for class_val, weight in args['class_weights'].items():
-    #     class_weight_mask[class_weight_mask==class_val] = weight
-    # class_weight_mask = class_weight_mask * train_mask
 
     train_history = model.fit(
         train_fusion, 
         train_label,
         epochs=args['epochs'],
         batch_size=10,
-        # sample_weight=class_weight_mask if args['average_type'] == 'macro' else train_mask,
         sample_weight=train_mask,
         shuffle=True,
         callbacks=[early_stopping],

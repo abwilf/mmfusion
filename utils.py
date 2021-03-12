@@ -8,6 +8,13 @@ from tqdm import tqdm
 from itertools import product
 from datetime import datetime
 
+def lvmap(f, arr, axis=None):
+    if axis is None:
+        f = np.vectorize(f)
+        return f(arr)
+    else:
+        return np.apply_along_axis(f,axis=axis,arr=arr)
+    
 def init_except_hook(gpu_id=None, filename=None, test=False):
     def my_except_hook(exctype, value, traceback):
         print('\n\n########### ERROR ###########')

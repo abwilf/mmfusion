@@ -28,7 +28,7 @@ Modify `consts.py` to reflect the paths you've chosen
 ```python
 STANDARD_GRID_PATH = '/z/abwilf/Standard-Grid/'
 MMSDK_PATH = '/z/abwilf/CMU-MultimodalSDK/'
-BASE_PATH = '/z/abwilf/mmfusion2' # the path to this directory
+BASE_PATH = '/z/abwilf/mmf' # the path to this directory
 ```
 
 Create and save a file called `azure_secrets.json`, with the following code inside.  If you decide to use azure for speech recognition in the future, this is where your API information will go.

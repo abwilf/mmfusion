@@ -7,6 +7,8 @@ import standard_grid
 
 import copy
 import hashlib
+import soundfile as sf
+import librosa
 
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 from silence_tensorflow import silence_tensorflow
@@ -151,7 +153,10 @@ def add_seq(dataset, obj, key_name, obj_type='path'):
 
 ### TODO: MODIFY ##
 # num_labels = 3 # mosei
-num_labels = 4 # iemocap
+num_labels = 3 # iemocap
+# num_labels = 4 # iemocap
+args = {}
+args['num_labels'] = num_labels
 def label_map_fn(labels):
     '''
     input: a one-dimensional array of labels (e.g., shape (10,...))
@@ -161,16 +166,25 @@ def label_map_fn(labels):
         iemocap: input = ['ang', 'ang', 'neu', 'hap','sad'], output = [0,0,1,2,3]
         mosei: input of shape (num_labels,1,7) with values for each of [sentiment,happy,sad,anger,surprise,disgust,fear] . output = [0,1,2] for neg, pos, neu sentiment
     '''
-    # # iemocap
-    label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
-    if len(labels.shape) > 1:
-        labels = np.squeeze(labels, axis=1)
-    return arlmap(lambda elt: label_map[elt.decode('utf8') if type(elt) in [bytes, np.bytes_] else elt], labels).astype('int32')
+    if args['mode'] =='inference' and args['evaluate_inference'] and 'iemocap' not in args['transcripts_path']:
+        return labels
 
-    # # mosei
+    # # iemocap
+    # label_map = {'ang': 0, 'hap': 1, 'exc': 1, 'neu': 2, 'sad': 3}
+    # if len(labels.shape) > 1:
+    #     labels = np.squeeze(labels, axis=1)
+    # return arlmap(lambda elt: label_map[elt.decode('utf8') if type(elt) in [bytes, np.bytes_] else elt], labels).astype('int32')
+
+    ## iemocap val
+    labels[labels<3]=0
+    labels[labels==3]=1
+    labels[labels>3]=2
+    return labels.astype('int32').reshape((-1))
+
+    # # # mosei
     # labels = labels[:,0]
-    # labels[labels>0]=1
-    # labels[labels==0]=2
+    # labels[labels>0]=2
+    # labels[labels==0]=1
     # labels[labels<0]=0
     # return labels.astype('int32')
 ###
@@ -188,15 +202,17 @@ def load_data():
         if args['wav_dir'][-1]=='/':
             args['wav_dir'] = args['wav_dir'][:-1]
         temp_wav_dir = args['wav_dir']+'_segments'
+        recom_dir = args['wav_dir']+'_recombined'
         
-        if ( not exists(args['transcripts_path']) and 'text' in args['modality'] ) or ('audio' in args['modality']):
+        if ( ( not exists(args['transcripts_path']) and 'text' in args['modality'] ) or ( ('audio' in args['modality']) and not exists(args['audio_path']) )) and 'iemocap' not in args['transcripts_path'] and 'mosei' not in args['transcripts_path']:
+            rmtree(temp_wav_dir)
             convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
 
         if not exists(args['transcripts_path']) and 'text' in args['modality']:
             assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
 
             wav_paths = glob(join(temp_wav_dir, '*'))
-            print(f'Transcribing {args["wav_dir"]} into {temp_wav_dir}')
+            print(f'Transcribing {temp_wav_dir}')
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
 
             # remove wav_segments that have no recognized speech
@@ -205,26 +221,79 @@ def load_data():
                 rmfile(join(temp_wav_dir, f'{elt}.wav'))
 
             # rename rest
-            unique_videos = set(lmap(lambda elt: elt.split('/')[-1].replace('.wav', '').split(convert.DS_SEP)[0], glob(join(temp_wav_dir, '*.wav'))))
+            unique_videos = set(lmap(lambda elt: elt.split('/')[-1].replace('.wav', '').split('[')[0], glob(join(temp_wav_dir, '*.wav'))))
             for vid in unique_videos:
-                recognized = [k for k,v in transcripts.items() if len(v['features'])>0 and k.split(convert.DS_SEP)[0] == vid]
-                recognized = sorted(recognized, key=lambda elt: int(elt.split(convert.DS_SEP)[1]))
+                recognized = [k for k,v in transcripts.items() if len(v['features'])>0 and k.split('[')[0] == vid]
+                recognized = sorted(recognized, key=lambda elt: int(elt.replace(']','').split('[')[1]))
+
+                unrecognized = [k for k,v in transcripts.items() if len(v['features'])==0 and k.split('[')[0] == vid]
+                
                 idxs = np.arange(len(recognized))
                 
-                x = [(k,f'{k.split(convert.DS_SEP)[0]}{convert.DS_SEP}{idx}') for k,idx in zip(recognized, idxs)]
+                orig_new = [(k, f'{k.split("[")[0]}[{idx}]') for k,idx in zip(recognized, idxs)]
+                unrecognized = [elt for elt in unrecognized if elt not in lzip(*orig_new)[1]] # filter only down to overflow - intermediate stuff will be overwritten
 
                 # move wavs, transcripts keys
-                for orig, new in x:
+                for orig, new in orig_new:
                     shutil.move(join(temp_wav_dir, f'{orig}.wav'), join(temp_wav_dir, f'{new}.wav'))
                     transcripts[new] = transcripts[orig]
                     if new != orig:
                         del transcripts[orig]
+                for unr in unrecognized:
+                    del transcripts[unr]
 
-            # transcripts = {k:v for k,v in transcripts.items() if len(v['features'])>0}
+            # grab labels to realign dummy intervals
+            labels = load_pk(args['labels_path'])
+            
+            # recombine transcripts to be a single "video" key
+            b = transcripts
+            unique_vid_keys = np.unique(lmap(lambda elt: elt.split('[')[0], lkeys(b)))
+            combined = {}
+
+            for vid_key in unique_vid_keys:
+                sorted_rel_keys = sorted(lfilter(lambda elt: vid_key in elt.split('[')[0], lkeys(b)), key=lambda elt: int(elt.replace(']','').split('[')[1]))
+
+                new_intervals = []
+                maxes = [] # for recreating intervals
+                for i in range(len(sorted_rel_keys)):
+                    new_max = np.max(np.concatenate(new_intervals)) if i > 0 else 0
+                    maxes.append(new_max)
+
+                    intervals_to_add = b[sorted_rel_keys[i]]['intervals']
+                    
+                    # get the length of the file so the added intervals at the end to not lose time
+                    x,sr = librosa.load(join(temp_wav_dir, f'{vid_key}[{i}].wav'))
+                    intervals_to_add[-1,-1] = x.shape[0]/sr
+                    intervals_to_add = intervals_to_add + new_max
+                    new_intervals.append(intervals_to_add)
+
+                new_intervals = np.concatenate(new_intervals)
+
+                assert np.all(np.argsort(new_intervals[:,1]) == np.arange(new_intervals.shape[0])) and np.all(np.argsort(new_intervals[:,0]) == np.arange(new_intervals.shape[0])), f'New intervals must be sorted properly after recombining: {new_intervals}'
+                combined[vid_key] = {
+                    'features': np.concatenate([ b[rel_key]['features'] for rel_key in sorted_rel_keys ]),
+                    'intervals': new_intervals,
+                }
+
+                maxes += [new_intervals.max()]
+                labels[vid_key]['intervals'] = ar(lzip(maxes[:-1], maxes[1:]))
+
+            transcripts = combined
+
+            # recombine wavs
+            rmtree(recom_dir)
+            mkdirp(recom_dir)
+            for vid_key in unique_vid_keys:
+                wav_paths = sorted(glob(join(temp_wav_dir,f'{vid_key}[*')), key=lambda elt: int( elt.split('/')[-1].replace(']','').replace('.wav','').split('[')[1] ) )
+                sr = librosa.load(wav_paths[0])[1]
+                x = np.concatenate([librosa.load(elt)[0] for elt in wav_paths])
+                sf.write(join(recom_dir,f'{vid_key}.wav'),x,sr)
+            
             save_pk(args['transcripts_path'], transcripts)
+            save_pk(args['labels_path'], labels)
         
         if 'audio' in args['modality']:
-            args['wav_dir'] = temp_wav_dir
+            args['wav_dir'] = recom_dir
     
     if 'text' in args['modality']:
         add_seq(dataset, args['transcripts_path'], 'text')
@@ -233,13 +302,13 @@ def load_data():
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
-    sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be broadest
+    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
+    if fake_labels:
+        sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be broadest
 
     if 'audio' in args['modality'] and 'text' in args['modality']:
         dataset.align('text', collapse_functions=[avg])
         dataset.impute('text')
-    
-    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
     
     if not fake_labels:
         add_seq(dataset, args['labels_path'], 'labels')
@@ -272,27 +341,11 @@ def load_data():
 
     if args['cross_utterance']:
         print('Reshaping data as cross utterance in the shape (num_vids, max_utts, 128, 512)...')
-
-        if args['mode'] == 'inference': # sort by utt_id from VAD split
-            idxs = np.argsort(np.squeeze(tensors['ids']))
-            for k in tensors.keys():
-                tensors[k] = tensors[k][idxs]
-
-            def f(elt):
-                vid = elt.split(convert.DS_SEP)[0]
-                utt = elt.split(convert.DS_SEP)[1].split('[')[0]
-                return f'{vid}[{utt}]'
-
-            tensors['ids'] = arlmap(f, np.squeeze(tensors['ids']))
-        
-        b = [(elt.split('[')[0], int(elt.split('[')[1].replace(']', '')), idx) for idx,elt in enumerate(np.squeeze(tensors['ids']))]
-        b.sort(key=lambda elt: (elt[0], elt[1]))
-        vid_keys,utt_idxs,full_idxs = lzip(*b)
-        max_utts = max(utt_idxs)+1
-
         audio, text, labels, utt_masks = [], [], [], []
-        vid_keys = ar(vid_keys)
-        unique_vid_keys = np.unique(vid_keys)
+
+        vid_keys = lvmap(lambda elt: elt.split('[')[0], tensors['ids'].reshape(-1))
+        max_utts = np.unique(vid_keys, return_counts=True)[1].max()
+        unique_vid_keys = pd.Series(vid_keys).unique()
 
         if args['mode'] == 'inference':
             args['test_keys'] = np.squeeze(unique_vid_keys)
@@ -327,7 +380,7 @@ def load_data():
 
             if not fake_labels:
                 relevant_labels = np.squeeze(tensors['labels'][vid_idxs]).reshape((num_utts,-1))
-                relevant_labels = label_map_fn(relevant_labels)
+                relevant_labels = label_map_fn(relevant_labels).reshape(-1)
                 utt_padded_labels = np.pad(relevant_labels, ((0,max_utts-num_utts)), 'constant')
                 labels.append(utt_padded_labels)
             
@@ -340,7 +393,6 @@ def load_data():
         v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
         text = v(text)
         
-        del tensors # GPU memory
         del dataset
 
         if fake_labels:
@@ -367,20 +419,46 @@ def load_data():
                 new_data.append(encoded)
             text = ar(new_data)
 
+        labels = ar(labels).astype('int32')
+        utt_masks = ar(utt_masks)
+
+        if args['mode'] == 'inference':
+            train_utt_masks, train_labels = ar([]), ar([])
+            val_utt_masks, val_labels = ar([]), ar([])
+        else:
+            train_labels = labels[train_idxs]
+            train_utt_masks = utt_masks[train_idxs]
+            train_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(train_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(train_labels, np.sum(train_utt_masks, axis=-1).astype('int32'))]))
+            train_class_sample_weights = lvmap(lambda elt: train_class_weights[elt], train_labels)
+            train_utt_masks = train_class_sample_weights * train_utt_masks
+
+            val_labels = labels[val_idxs]
+            val_utt_masks = utt_masks[val_idxs]
+            val_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(val_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(val_labels, np.sum(val_utt_masks, axis=-1).astype('int32'))]))
+            val_class_sample_weights = lvmap(lambda elt: val_class_weights[elt], val_labels)
+            val_utt_masks = val_class_sample_weights * val_utt_masks
+
+        test_labels = labels[test_idxs]
+        test_utt_masks = utt_masks[test_idxs]
+        if args['mode'] != 'inference':
+            test_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(test_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(test_labels, np.sum(test_utt_masks, axis=-1).astype('int32'))]))
+            test_class_sample_weights = lvmap(lambda elt: test_class_weights[elt], test_labels)
+            test_utt_masks = test_class_sample_weights * test_utt_masks
+        
         if 'audio' in args['modality'] and 'text' in args['modality']:
-            train = ar(audio)[train_idxs], ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
-            val = ar(audio)[val_idxs], ar(text)[val_idxs], ar(labels)[val_idxs], ar(utt_masks)[val_idxs], unique_vid_keys[val_idxs]
-            test = ar(audio)[test_idxs], ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
+            train = ar(text)[train_idxs], ar(audio)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
+            val = ar(text)[val_idxs], ar(audio)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
+            test = ar(text)[test_idxs], ar(audio)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
 
         elif 'audio' in args['modality']:
-            train = ar(audio)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
-            val = ar(audio)[val_idxs], ar(labels)[val_idxs], ar(utt_masks)[val_idxs], unique_vid_keys[val_idxs]
-            test = ar(audio)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
+            train = ar(audio)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
+            val = ar(audio)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
+            test = ar(audio)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
 
         elif 'text' in args['modality']:
-            train = ar(text)[train_idxs], ar(labels)[train_idxs], ar(utt_masks)[train_idxs], unique_vid_keys[train_idxs]
-            val = ar(text)[val_idxs], ar(labels)[val_idxs], ar(utt_masks)[val_idxs], unique_vid_keys[val_idxs]
-            test = ar(text)[test_idxs], ar(labels)[test_idxs], ar(utt_masks)[test_idxs], unique_vid_keys[test_idxs]
+            train = ar(text)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
+            val = ar(text)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
+            test = ar(text)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
 
     else: # within utterance
         labels = label_map_fn(np.squeeze(tensors['labels'])) if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])
@@ -440,16 +518,23 @@ def load_data():
             train = text[train_idxs], audio[train_idxs], labels[train_idxs], ids[train_idxs]
             val = text[val_idxs], audio[val_idxs], labels[val_idxs], ids[val_idxs]
             test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
+        
+        if args['mode'] != 'inference':
+            args['train_sample_weight'] = get_sample_weight(labels[train_idxs])
+            args['val_sample_weight'] = get_sample_weight(labels[val_idxs])
+            args['test_sample_weight'] = get_sample_weight(labels[test_idxs])
 
     if args['mode'] != 'inference':
         print(f'Saving tensors to {args["tensors_path"]}.pk')
         save_pk(args['tensors_path'], (train, val, test))
+    else:
+        save_pk('./.temp_tensors.pk', tensors)
     return train, val, test
     
 def train_cross_multi(train, val, test):
-    train_audio, train_text, train_labels, train_utt_masks, train_ids = train
-    val_audio, val_text, val_labels, val_utt_masks, val_ids = val
-    test_audio, test_text, test_labels, test_utt_masks, test_ids = test
+    train_text, train_audio, train_labels, train_utt_masks, train_ids = train
+    val_text, val_audio, val_labels, val_utt_masks, val_ids = val
+    test_text, test_audio, test_labels, test_utt_masks, test_ids = test
 
     train_cross_uni_audio(
         train=(train_audio, train_labels, train_utt_masks, train_ids),
@@ -468,9 +553,9 @@ def train_cross_multi(train, val, test):
 
 
 def train_within_multi(train, val, test):
-    train_audio, train_text, train_labels, train_ids = train
-    val_audio, val_text, val_labels, val_ids = val
-    test_audio, test_text, test_labels, test_ids = test
+    train_text, train_audio, train_labels, train_ids = train
+    val_text, val_audio, val_labels, val_ids = val
+    test_text, test_audio, test_labels, test_ids = test
 
     dropout=args['drop_within_multi']
     TD = TimeDistributed
@@ -510,14 +595,16 @@ def train_within_multi(train, val, test):
         x={'text': train_text, 'audio': train_audio},
         y=train_labels,
         batch_size=10,
+        sample_weight=args['train_sample_weight'],
         epochs=500,
-        validation_data=({'text': val_text, 'audio': val_audio}, val_labels),
+        validation_data=({'text': val_text, 'audio': val_audio}, val_labels, args['val_sample_weight']),
         callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
         verbose=1,
     ).history
     eval_history = model.evaluate(
         x={'text': test_text, 'audio': test_audio},
         y=test_labels,
+        sample_weight=args['test_sample_weight'],
         batch_size=10,
     )
     mkdirp(args['model_path'])
@@ -772,6 +859,14 @@ def train_cross_uni_text(train, val, test):
     }
     return res
 
+
+def get_sample_weight(labels,class_weights=None):
+    labels = labels.astype('int32')
+    if class_weights is None:
+        class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(labels).astype('int32'), y=labels)
+    sample_weight = lvmap(lambda elt: class_weights[elt], labels)
+    return sample_weight
+
 def train_within_uni_text(train, val, test):
     train_data, train_labels, train_ids = train
     val_data, val_labels, val_ids = val
@@ -798,14 +893,17 @@ def train_within_uni_text(train, val, test):
     train_history = model.fit(
         x=train_data,
         y=train_labels,
+        sample_weight=args['train_sample_weight'],
         batch_size=args['bs'],
         epochs=args['epochs'],
-        validation_data=(val_data, val_labels),
+        validation_data=(val_data, val_labels, args['val_sample_weight']),
         callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
     ).history
+
     eval_history = model.evaluate(
         x=test_data,
         y=test_labels,
+        sample_weight=args['test_sample_weight'],
         batch_size=args['bs'],
     )
     mkdirp(args['model_path'])
@@ -850,9 +948,9 @@ def main_inference(args_in):
 
     _,_, test = load_data() # only consider test data with dummy labels
 
-    model = tf.keras.models.load_model(args['model_path'])
     print('Predicting...')
     if not args['cross_utterance']: # within
+        model = tf.keras.models.load_model(args['model_path'])
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
             loss='sparse_categorical_crossentropy',
@@ -861,7 +959,7 @@ def main_inference(args_in):
 
         # max_utts = model._build_input_shape[1] #56 for iemocap
         if len(args['modality'].split(','))>1: # multimodal
-            test_audio, test_text, test_labels, ids = test
+            test_text, test_audio, test_labels, ids = test
             if args['evaluate_inference']:
                 model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
             preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
@@ -873,15 +971,8 @@ def main_inference(args_in):
             preds = model.predict(test_data)
 
     else:
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
-            loss='sparse_categorical_crossentropy',
-            weighted_metrics=['sparse_categorical_accuracy'],
-            sample_weight_mode='temporal',
-        )
-        max_utts = model._build_input_shape[1] #56 for iemocap
         if len(args['modality'].split(','))>1: # multimodal
-            test_audio, test_text, test_labels, test_utt_masks, ids = test
+            test_text, test_audio, test_labels, test_utt_masks, ids = test
 
             print('Loading models for HFFN inference...')
             uni_text_model = tf.keras.models.load_model(join(args['hffn_path'], 'uni_text'))
@@ -899,25 +990,43 @@ def main_inference(args_in):
             
         else:
             test_data, test_labels, test_utt_masks, ids = test
+            model = tf.keras.models.load_model(args['model_path'])
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
+                loss='sparse_categorical_crossentropy',
+                weighted_metrics=['sparse_categorical_accuracy'],
+                sample_weight_mode='temporal',
+            )
+            max_utts = model._build_input_shape[1] #56 for iemocap
+            
             if args['evaluate_inference']:
                 model.evaluate(test_data, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
             preds = model.predict(test_data)
     
     if args['print_transcripts']:
-        a = {k: ' '.join(np.squeeze(v['features'])) for k,v in load_pk(args['transcripts_path']).items()}
+        a = {k: ' '.join(v['features'].reshape(-1)) for k,v in load_pk(args['transcripts_path']).items()}
         label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
-        reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+        # reverse_label_map = ['ang', 'hap', 'neu', 'sad']
+        reverse_label_map = [0,1,2]
         if args['cross_utterance']:
-            for i,vid_id in enumerate(ids):
-                utt_keys = ar(sorted(lfilter(lambda elt: vid_id in elt, lkeys(a)), key=lambda elt: int(elt.split(convert.DS_SEP)[1])))
-                assert np.sum(test_utt_masks[i])==len(utt_keys)
-                for j,utt_key in enumerate(utt_keys):
-                    print('Vid id:', vid_id)
-                    print('Transcript:', a[utt_key])
-                    label = np.argmax(preds, axis=-1)[i,j]
-                    print('Pred:', reverse_label_map[label])
-                    print()
+            utt_masks = np.sum(test_utt_masks, axis=-1).astype('int32')
+            vid_ids = np.concatenate([ [vid_id]*num_utts for vid_id,num_utts in zip(ids, utt_masks)])
+            vid_ids
 
+            utt_ids = np.concatenate([ np.arange(num_utts) for num_utts in utt_masks ])
+            utt_ids
+
+            y_pred = np.argmax(preds, axis=-1)
+            y_preds = np.concatenate([ y_pred[i,:num_utts] for i,num_utts in zip(np.arange(utt_masks.shape[0]), utt_masks)])
+
+            y_true = np.concatenate([ test_labels[i,:num_utts] for i,num_utts in zip(np.arange(utt_masks.shape[0]), utt_masks)])
+            y_true.shape
+
+            df = pd.DataFrame({'vid_ids': vid_ids, 'utt_ids': utt_ids, 'pred': y_preds, 'label': y_true, 'correct': y_preds==y_true})
+            tensors = load_pk('./.temp_tensors.pk')
+            df['text'] = df.apply(lambda elt: ' '.join(tensors['text'][np.where(tensors['ids'].reshape(-1)==f"{elt['vid_ids']}[{elt['utt_ids']}]")[0][0]].reshape(-1)).replace(' 0.0', ''), axis=1)
+            df = df[['vid_ids', 'utt_ids', 'text', 'correct', 'pred', 'label']]
+            print(df)
         else:
             for i,id in enumerate(ids):
                 id = id.split('[')[0]
@@ -994,6 +1103,7 @@ if __name__ == '__main__':
         parser.register_parameter(*param)
 
     args = vars(parser.compile_argparse())
+    args['num_labels'] = num_labels
 
     assert args['mode'] in ['train', 'inference']
     keys = load_json(args['keys_path'])
