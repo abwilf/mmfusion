@@ -197,12 +197,18 @@ def load_data():
 
     dataset = mmdatasdk.mmdataset(recipe={'dummy': args['dummy_path']})
     del dataset.computational_sequences['dummy']
-
+    
+    labels = load_pk(args['labels_path'])
     if args['mode'] == 'inference':
         if args['wav_dir'][-1]=='/':
             args['wav_dir'] = args['wav_dir'][:-1]
         temp_wav_dir = args['wav_dir']+'_segments'
         recom_dir = args['wav_dir']+'_recombined'
+        
+        if args['only_segment']:
+            rmtree(temp_wav_dir)
+            convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
+            exit()
         
         if ( ( not exists(args['transcripts_path']) and 'text' in args['modality'] ) or ( ('audio' in args['modality']) and not exists(args['audio_path']) )) and 'iemocap' not in args['transcripts_path'] and 'mosei' not in args['transcripts_path']:
             rmtree(temp_wav_dir)
@@ -243,8 +249,10 @@ def load_data():
                     del transcripts[unr]
 
             # grab labels to realign dummy intervals
-            labels = load_pk(args['labels_path'])
-            
+            fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
+            if fake_labels:
+                labels = {}
+
             # recombine transcripts to be a single "video" key
             b = transcripts
             unique_vid_keys = np.unique(lmap(lambda elt: elt.split('[')[0], lkeys(b)))
@@ -260,7 +268,14 @@ def load_data():
                     maxes.append(new_max)
 
                     intervals_to_add = b[sorted_rel_keys[i]]['intervals']
-                    
+
+                    if fake_labels:
+                        if vid_key not in labels:
+                            labels[vid_key] = {
+                                'features': ar([ [1] for _ in range(len(sorted_rel_keys))]),
+                                'intervals': []
+                            }
+
                     # get the length of the file so the added intervals at the end to not lose time
                     x,sr = librosa.load(join(temp_wav_dir, f'{vid_key}[{i}].wav'))
                     intervals_to_add[-1,-1] = x.shape[0]/sr
@@ -302,19 +317,11 @@ def load_data():
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
-    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
-    if fake_labels:
-        sub_ds = copy.deepcopy(dataset['audio'] if 'audio' in args['modality'] else dataset['text']) # audio as default b/c alignment will be broadest
-
     if 'audio' in args['modality'] and 'text' in args['modality']:
         dataset.align('text', collapse_functions=[avg])
         dataset.impute('text')
     
-    if not fake_labels:
-        add_seq(dataset, args['labels_path'], 'labels')
-    else:
-        labels = {k: {'features': ar([[1]]), 'intervals': ar([ [sub_ds[k]['intervals'].min(), sub_ds[k]['intervals'].max()] ]) } for k in sub_ds.keys()}
-        add_seq(dataset, labels, 'labels', obj_type='obj')
+    add_seq(dataset, labels, 'labels', obj_type='obj')
 
     dataset.align('labels')
     dataset.hard_unify()
@@ -1077,7 +1084,8 @@ if __name__ == '__main__':
         ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
         ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
         ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
-        ('--VAD_agg',int, 1, 'Aggressiveness of VAD during inference'),
+        ('--VAD_agg',int, 0, 'Aggressiveness of VAD during inference'),
+        ('--only_segment',int, 0, 'Only segment wavs (used for human labelling)'),
 
         # hyperparameters
         ('--epochs', int, 500, ''),

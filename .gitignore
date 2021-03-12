@@ -16,3 +16,6 @@ tensors/*
 *.ipynb
 demo/*
 demo_data2
+test_data
+iemocap_test_data
+.temp*
