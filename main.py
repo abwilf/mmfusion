@@ -42,6 +42,11 @@ import tensorflow_hub as hub
 import tensorflow_text as text
 # from official.nlp import optimization  # to create AdamW optmizer - only needed if fine tuning
 
+import librosa
+import soundfile as sf
+import scipy.io.wavfile as wav
+import subprocess
+
 sys.path.append(DEEPSPEECH_PATH)
 import convert
 
@@ -55,6 +60,45 @@ map_model_to_preprocess = { 'bert_en_uncased_L-12_H-768_A-12': 'https://tfhub.de
 tfhub_handle_encoder = map_name_to_handle[bert_model_name]
 tfhub_handle_preprocess = map_model_to_preprocess[bert_model_name]
 
+n_mels = 40
+n_fft = 2048
+hop_length = 160 # mfbs are extracted in intervals of .1 second
+fmin = 0
+fmax = None
+SR = 16000
+n_iter = 32
+MFB_WIN_STEP = .01
+EPS = 1e-6
+clampVal = 3.0
+
+def get_mfb(wav_file):
+    y, sr = librosa.load(wav_file, sr=SR)
+    y = librosa.effects.preemphasis(y, coef=0.97)
+    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, n_mels=n_mels, hop_length=hop_length, fmin=fmin, fmax=fmax, htk=False)
+    # return np.log(mel_spec.T + EPS)
+    return mel_spec.T
+
+def new_get_mfbs(wav_file):
+    mfb = get_mfb(wav_file)
+    mfb = (mfb - mfb_stats['mean']) / (mfb_stats['std'] + EPS)
+    
+    mfb[mfb>clampVal] = clampVal
+    mfb[mfb<-clampVal] = -clampVal
+    return mfb
+
+def get_mfb_intervals(end, step):
+    end = trunc(end*100, decs=2)
+    step = trunc(step*100, decs=2)
+
+    a = np.arange(0, end, step)
+
+    a = trunc(a / 100, decs=2)
+    end = trunc(end/100, decs=2)
+    step = trunc(step/100, decs=2)
+
+    b = np.concatenate([a[1:], [a[-1] + step]], axis=0)
+    return np.vstack([a,b]).T
+
 def avg(intervals: np.array, features: np.array) -> np.array:
     try:
         return np.average(features, axis=0)
@@ -64,7 +108,7 @@ def avg(intervals: np.array, features: np.array) -> np.array:
 data = {}
 def add_unaligned_mfb(video_key):
     wav_path = join(args['wav_dir'], f'{video_key}.wav')
-    mfbs, _, _ = new_get_mfbs(wav_path)
+    mfbs = new_get_mfbs(wav_path)
     intervals = get_mfb_intervals(MFB_WIN_STEP*mfbs.shape[0], MFB_WIN_STEP)
     if not mfbs.shape[0] == intervals.shape[0]:
         save_pk('temp.pk', {'mfbs': mfbs, 'intervals': intervals})
@@ -74,6 +118,20 @@ def add_unaligned_mfb(video_key):
         'features': mfbs,
         'intervals': intervals
     }
+
+mfb_stats = {
+    'mean': [],
+    'std': [],
+    'length': [],
+}
+
+def get_mfb_stats(video_key):
+    wav_path = join(args['wav_dir'], f'{video_key}.wav')
+    mfb = get_mfb(wav_path)
+    mean, std = np.mean(mfb), np.std(mfb)
+    mfb_stats['mean'].append(mean)
+    mfb_stats['std'].append(std)
+    mfb_stats['length'].append(mfb.shape[0])
 
 def deploy_unaligned_mfb_csd(check_labels=True):
     csd_name = f'mfb_temp'
@@ -87,6 +145,23 @@ def deploy_unaligned_mfb_csd(check_labels=True):
     if exists(args['audio_path']) and not args['overwrite_mfbs']:
         print(f'MFBs exist in {args["audio_path"]}.  Moving on...')
         return args["audio_path"]
+
+    print(f'Getting global statistics over mfbs...\n')
+    num_workers = 5
+    pool = mp_thread.Pool(num_workers)
+
+    # non parallelized
+    # for wav_key in tqdm(wav_keys[:10]):
+    #     get_mfb_stats(wav_key)
+    # exit()
+
+    for _ in tqdm(pool.imap_unordered(get_mfb_stats, wav_keys), total=len(wav_keys)):
+        pass
+    pool.close() 
+    pool.join()
+
+    mfb_stats['mean'] = np.mean(mfb_stats['mean'])
+    mfb_stats['std'] = np.mean(mfb_stats['std'])
 
     print(f'Mapping {args["wav_dir"]} to unaligned mfbs in {args["audio_path"]}...\n')
     num_workers = 5
@@ -199,7 +274,10 @@ def load_data():
     del dataset.computational_sequences['dummy']
     
     labels = load_pk(args['labels_path'])
+    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
     if args['mode'] == 'inference':
+        timing_path = '/'.join(args['labels_path'].split('/')[:-1])+'/timing.pk'
+
         if args['wav_dir'][-1]=='/':
             args['wav_dir'] = args['wav_dir'][:-1]
         temp_wav_dir = args['wav_dir']+'_segments'
@@ -209,17 +287,17 @@ def load_data():
             rmtree(temp_wav_dir)
             convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
             exit()
-        
-        if ( ( not exists(args['transcripts_path']) and 'text' in args['modality'] ) or ( ('audio' in args['modality']) and not exists(args['audio_path']) )) and 'iemocap' not in args['transcripts_path'] and 'mosei' not in args['transcripts_path']:
+   
+        # if True:
+        if not exists(args['transcripts_path']) and 'text' in args['modality']:
             rmtree(temp_wav_dir)
             convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
-
-        if not exists(args['transcripts_path']) and 'text' in args['modality']:
             assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
 
             wav_paths = glob(join(temp_wav_dir, '*'))
             print(f'Transcribing {temp_wav_dir}')
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+            save_pk(args['transcripts_path'], transcripts)
 
             # remove wav_segments that have no recognized speech
             no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]
@@ -249,7 +327,6 @@ def load_data():
                     del transcripts[unr]
 
             # grab labels to realign dummy intervals
-            fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
             if fake_labels:
                 labels = {}
 
@@ -306,6 +383,7 @@ def load_data():
             
             save_pk(args['transcripts_path'], transcripts)
             save_pk(args['labels_path'], labels)
+            save_pk(timing_path, labels)
         
         if 'audio' in args['modality']:
             args['wav_dir'] = recom_dir
@@ -314,13 +392,20 @@ def load_data():
         add_seq(dataset, args['transcripts_path'], 'text')
     
     if 'audio' in args['modality']:
+        if args['mode']=='inference':
+            rmfile(args['audio_path'])
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
     if 'audio' in args['modality'] and 'text' in args['modality']:
         dataset.align('text', collapse_functions=[avg])
         dataset.impute('text')
-    
+            
+    if args['mode'] == 'inference':
+        timing = load_pk(timing_path)
+        for k in labels.keys():
+            labels[k]['intervals']=timing[k]['intervals']
+
     add_seq(dataset, labels, 'labels', obj_type='obj')
 
     dataset.align('labels')
@@ -635,12 +720,12 @@ def train_cross_uni_audio(train, val, test):
     test_data, test_labels, test_utt_masks, test_ids = test
 
     input = Input(shape=(train_data.shape[1],train_data.shape[2],train_data.shape[3]))
-    conv = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=3, padding='same', data_format='channels_last', dtype='float32'))(input)
+    conv = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=16, padding='same', data_format='channels_last', dtype='float32'))(input)
     drop = TimeDistributed(Dropout(args['drop_audio']))(conv)
-    conv2 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=4, padding='same', data_format='channels_last', dtype='float32'))(drop)
+    conv2 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=16, padding='same', data_format='channels_last', dtype='float32'))(drop)
     drop2 = TimeDistributed(Dropout(args['drop_audio']))(conv2)
     mp = TimeDistributed(MaxPool1D(pool_size=4, data_format='channels_last'))(drop2)
-    conv3 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=2, padding='same', data_format='channels_last', dtype='float32'))(mp)
+    conv3 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=8, padding='same', data_format='channels_last', dtype='float32'))(mp)
     drop3 = TimeDistributed(Dropout(args['drop_audio']))(conv3)
     gmp = TimeDistributed(GlobalMaxPooling1D())(drop3)
 
@@ -742,6 +827,7 @@ def train_within_uni_audio(train, val, test):
         x=train_data,
         y=train_labels,
         batch_size=args['bs'],
+        sample_weight=args['train_sample_weight'],
         epochs=args['epochs'],
         validation_data=(val_data, val_labels),
         callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
@@ -750,6 +836,7 @@ def train_within_uni_audio(train, val, test):
         x=test_data,
         y=test_labels,
         batch_size=args['bs'],
+        sample_weight=args['test_sample_weight'],
     )
     mkdirp(args['model_path'])
     print('Saving model...')
@@ -1033,7 +1120,7 @@ def main_inference(args_in):
             tensors = load_pk('./.temp_tensors.pk')
             df['text'] = df.apply(lambda elt: ' '.join(tensors['text'][np.where(tensors['ids'].reshape(-1)==f"{elt['vid_ids']}[{elt['utt_ids']}]")[0][0]].reshape(-1)).replace(' 0.0', ''), axis=1)
             df = df[['vid_ids', 'utt_ids', 'text', 'correct', 'pred', 'label']]
-            print(df)
+            
         else:
             for i,id in enumerate(ids):
                 id = id.split('[')[0]

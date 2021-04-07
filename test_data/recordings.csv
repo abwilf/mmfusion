@@ -1,0 +1,25 @@
+ID,Utt Idx,Speaker ID,Transcript,AHNS,Val (0-2),Act,ASR,Device
+five,0,a,"I am so excited 2020 is over!!! It's true - Trump was a terrible president, and did his best to ruin our country",,2,2,,laptop
+five,1,a,"The virus ravaged the united states, killing hundreds of thousands",,0,1,,laptop
+five,2,a,It's questionable whether our country will be able to recover economically from the trillions we have spent on stimulus,,1,1,,laptop
+five,3,a,"But the sun is shining, it's a new day, and we're the greatest country on earth.  We can bounce back from this.",,2,1,,laptop
+six,0,a,How are you doing today?,,1,1,,laptop
+six,1,a,"Not well, I've been super upset",,0,0,,laptop
+six,2,a,"Man, that's too bad",,0,0,,laptop
+six,3,a,These are such tough times,,0,0,,laptop
+six,4,a,Yeah on the bright side I found this amazing new recipe,,2,1,,laptop
+six,5,a,It looks super tasty,,2,1,,laptop
+six,6,a,I'm really excited,,2,1,,laptop
+six,7,a,Oh yeah canada knows its food,,2,2,,laptop
+seven,0,a,I just finished up this nice walk through the city.  The weather's starting to turn and everyone's super excited.,,2,1,,huawei
+seven,1,a,Did you go down to the water?,,1,1,,huawei
+seven,2,a,Yes.  The east river is kind of sludgy though - not my favorite.,,0,1,,huawei
+seven,3,a,"Yeah I miss the highlands of another city, like SF.",,0,1,,huawei
+seven,4,a,"Views are really important to me, and NY doesn't really have that.",,0,1,,huawei
+seven,5,a,Yeah it's kind of boring and flat.,,0,1,,huawei
+eight,0,a,If you could move anywhere where would you move?,,1,1,,huawei
+eight,1,a,"Oh, easily New Zealand.  It's such an open and welcoming place, and the scenery is beautiful.",,2,1,,huawei
+eight,2,a,Go on.,,1,1,,huawei
+eight,3,a,"The people are quite lovely, and between the Kahurangi forest, the marlborough sounds, fiordland, the southern alps, the northern hot springs, and the glowworm caves, what's not to love?",,2,1,,huawei
+eight,4,a,Is it worth going all the way to the bottom of the world though?,,1,1,,huawei
+eight,5,a,"Yes, definitely.  If I had a month or two and didn't have to worry about COVID, I'd jet down there right away.",,2,1,,huawei
