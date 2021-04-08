@@ -392,8 +392,6 @@ def load_data():
         add_seq(dataset, args['transcripts_path'], 'text')
     
     if 'audio' in args['modality']:
-        if args['mode']=='inference':
-            rmfile(args['audio_path'])
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
         add_seq(dataset, args['audio_path'], 'audio')
 
@@ -556,12 +554,12 @@ def load_data():
         labels = label_map_fn(np.squeeze(tensors['labels'])) if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])
         ids = np.squeeze(tensors['ids'])
 
-        if args['train_keys'] is None:
-            args['train_keys'], args['test_keys'] = train_test_split(np.squeeze(tensors['ids']), test_size=.2, random_state=11)
-        
         if args['mode'] == 'inference':
             args['test_keys'] = np.squeeze(tensors['ids'])
             args['train_keys'] = ar([])
+
+        if args['train_keys'] is None:
+            args['train_keys'], args['test_keys'] = train_test_split(np.squeeze(tensors['ids']), test_size=.2, random_state=11)
             
         train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], np.squeeze(tensors['ids'])))[0]
         if args['mode'] == 'inference':
@@ -1138,62 +1136,65 @@ def main_inference(args_in):
     }
     return full_res
 
+
+tensors_base_path = join(BASE_PATH, 'tensors')
+data_path = join(BASE_PATH, 'data')
+ie_path = join(data_path, 'iemocap')
+models_path = join(BASE_PATH, 'models')
+uni_path = join(data_path, 'uni.pk')
+
+params = [
+    # core paths
+    ('--transcripts_path',str,join(ie_path, 'IEMOCAP_TimestampedWords.pk'), 'Path to transcripts.'),
+    ('--audio_path',str,join(ie_path, 'mfb.pk'), 'Where mfbs will be (or are already) saved.'),
+    ('--labels_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), 'Path to labels.'),
+    ('--dummy_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), 'Used to initialize dataset.  Can be any valid labels file.  You probably will not change this.'),
+    ('--tensors_path',str, join(tensors_base_path, 'tensors.pk'), 'Where tensors will be stored for this dataset.  If "unique", will store a hash in tensors folder.'),
+    ('--wav_dir',str, join(ie_path, 'wavs'), 'Path to wav dir.'),
+    ('--model_path',str,join(models_path, 'model'), 'Where model will be saved.'),
+    ('--hffn_path',str,join(models_path, 'hffn'), 'Where uni text, uni audio, and hffn models will be saved.'),
+    ('--uni_path',str,uni_path, 'Where unimodal activations are stored before feeding into hffn (in the case of cross utterance multimodal)'),
+
+    # core options
+    ('--mode',str,'train', 'train or inference'),
+    ('--cross_utterance', int, 0, 'If 0, build a within-utterance model.  If 1, build a cross utterance model.'),
+    ('--modality', str,'text', 'modalities separated by ,.  options are ["text,audio", "audio,text", "audio", "text"]'),
+    ('--evaluate_inference', int, 0, 'If mode==inference and this is 1, evaluate using labels passed in instead of returning prediction.  This can be a good sanity check on the training process if you have labels, and want to see how well your saved model is inferring on some dataset.'),
+    ('--overwrite_tensors', int, 0, 'Do you want to overwrite tensors in tensors_path or not?  By default, we will use tensors we find in tensors_path instead of regenerating.'),
+    ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
+    ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
+    ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
+    ('--VAD_agg',int, 0, 'Aggressiveness of VAD during inference'),
+    ('--only_segment',int, 0, 'Only segment wavs (used for human labelling)'),
+
+    # hyperparameters
+    ('--epochs', int, 500, ''),
+    ('--trials', int, 1, 'Number of trials you want to run.  All results will be saved and appended, and the model from the last trial will be saved. This is useful if there is variability in how well your model performs, so you can build performance statistics across trials.'),
+    ('--seq_len', int, 50, 'The max sequence length.  If involving text, this will mean max number of words per utterance.  If involving only audio, this will be the max number of mfbs.'),
+    ('--bs', int, 10, 'Batch size'),
+
+    ('--lstm_units_text', int, 32, 'Number of units used in text lstm'),
+    ('--drop_text', float, .2, 'Dropout rate for text'),
+    ('--drop_text_lstm', float, .3, 'Dropout rate for text lstm'),
+    ('--text_lr', float, 1e-3, 'Learning rate for text'),
+    ('--filters_text', int,50, 'Number of filters used for cross utterance text conv layers'),
+
+    ('--drop_audio', float, .2, 'Dropout rate for audio'),
+    ('--drop_audio_lstm', float, .3, 'Dropout rate for audio lstm'),
+    ('--audio_lr', float, 1e-3, 'Audio learning rate'),
+    ('--filters_audio', int, 50, 'Number of filters for audio conv layers'),
+    
+    ('--drop_within_multi', float, .2, 'Dropout rate for within multimodal'),
+    ('--multi_lr', float, 1e-3, 'Learning rate for within multimodal')
+]
+
 if __name__ == '__main__':
     parser = standard_grid.ArgParser()
 
-    tensors_base_path = join(BASE_PATH, 'tensors')
-    data_path = join(BASE_PATH, 'data')
-    ie_path = join(data_path, 'iemocap')
-    models_path = join(BASE_PATH, 'models')
-    uni_path = join(data_path, 'uni.pk')
     mkdirp(tensors_base_path)
     mkdirp(ie_path)
     mkdirp(models_path)
 
-    params = [
-        # core paths
-        ('--transcripts_path',str,join(ie_path, 'IEMOCAP_TimestampedWords.pk'), 'Path to transcripts.'),
-        ('--audio_path',str,join(ie_path, 'mfb.pk'), 'Where mfbs will be (or are already) saved.'),
-        ('--labels_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), 'Path to labels.'),
-        ('--dummy_path',str, join(ie_path, 'IEMOCAP_EmotionLabels.pk'), 'Used to initialize dataset.  Can be any valid labels file.  You probably will not change this.'),
-        ('--tensors_path',str, join(tensors_base_path, 'tensors.pk'), 'Where tensors will be stored for this dataset.  If "unique", will store a hash in tensors folder.'),
-        ('--wav_dir',str, join(ie_path, 'wavs'), 'Path to wav dir.'),
-        ('--model_path',str,join(models_path, 'model'), 'Where model will be saved.'),
-        ('--hffn_path',str,join(models_path, 'hffn'), 'Where uni text, uni audio, and hffn models will be saved.'),
-        ('--uni_path',str,uni_path, 'Where unimodal activations are stored before feeding into hffn (in the case of cross utterance multimodal)'),
-
-        # core options
-        ('--mode',str,'train', 'train or inference'),
-        ('--cross_utterance', int, 0, 'If 0, build a within-utterance model.  If 1, build a cross utterance model.'),
-        ('--modality', str,'text', 'modalities separated by ,.  options are ["text,audio", "audio,text", "audio", "text"]'),
-        ('--evaluate_inference', int, 0, 'If mode==inference and this is 1, evaluate using labels passed in instead of returning prediction.  This can be a good sanity check on the training process if you have labels, and want to see how well your saved model is inferring on some dataset.'),
-        ('--overwrite_tensors', int, 0, 'Do you want to overwrite tensors in tensors_path or not?  By default, we will use tensors we find in tensors_path instead of regenerating.'),
-        ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
-        ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
-        ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
-        ('--VAD_agg',int, 0, 'Aggressiveness of VAD during inference'),
-        ('--only_segment',int, 0, 'Only segment wavs (used for human labelling)'),
-
-        # hyperparameters
-        ('--epochs', int, 500, ''),
-        ('--trials', int, 1, 'Number of trials you want to run.  All results will be saved and appended, and the model from the last trial will be saved. This is useful if there is variability in how well your model performs, so you can build performance statistics across trials.'),
-        ('--seq_len', int, 50, 'The max sequence length.  If involving text, this will mean max number of words per utterance.  If involving only audio, this will be the max number of mfbs.'),
-        ('--bs', int, 10, 'Batch size'),
-
-        ('--lstm_units_text', int, 32, 'Number of units used in text lstm'),
-        ('--drop_text', float, .2, 'Dropout rate for text'),
-        ('--drop_text_lstm', float, .3, 'Dropout rate for text lstm'),
-        ('--text_lr', float, 1e-3, 'Learning rate for text'),
-        ('--filters_text', int,50, 'Number of filters used for cross utterance text conv layers'),
-    
-        ('--drop_audio', float, .2, 'Dropout rate for audio'),
-        ('--drop_audio_lstm', float, .3, 'Dropout rate for audio lstm'),
-        ('--audio_lr', float, 1e-3, 'Audio learning rate'),
-        ('--filters_audio', int, 50, 'Number of filters for audio conv layers'),
-        
-        ('--drop_within_multi', float, .2, 'Dropout rate for within multimodal'),
-        ('--multi_lr', float, 1e-3, 'Learning rate for within multimodal')
-    ]
     for param in params:
         parser.register_parameter(*param)
 
