@@ -51,6 +51,7 @@ sys.path.append(DEEPSPEECH_PATH)
 import convert
 
 from transcribe import *
+from speaker_verification import *
 
 metadata_template = { "root name": '', "computational sequence description": '', "computational sequence version": '', "alignment compatible": '', "dataset name": '', "dataset version": '', "creator": '', "contact": '', "featureset bib citation": '', "dataset bib citation": ''}
 
@@ -273,9 +274,13 @@ def load_data():
     dataset = mmdatasdk.mmdataset(recipe={'dummy': args['dummy_path']})
     del dataset.computational_sequences['dummy']
     
-    labels = load_pk(args['labels_path'])
+    labels = load_pk(args['labels_path']) if 'pk' in args['labels_path'] else load_json(args['labels_path'])
     fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
+    transcripts = None
     if args['mode'] == 'inference':
+        # speaker verification
+        args['speaker_ver'] = {} # vid: [ [{profile_id: 'profile id', score: 'score' for all profile_ids in rank order] for _ in num_utts]
+        
         timing_path = '/'.join(args['labels_path'].split('/')[:-1])+'/timing.pk'
 
         if args['wav_dir'][-1]=='/':
@@ -288,16 +293,21 @@ def load_data():
             convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
             exit()
    
-        # if True:
-        if not exists(args['transcripts_path']) and 'text' in args['modality']:
+        if True:
+        # if 'text' in args['modality']:
             rmtree(temp_wav_dir)
             convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
             assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
 
             wav_paths = glob(join(temp_wav_dir, '*'))
             print(f'Transcribing {temp_wav_dir}')
-            transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
-            save_pk(args['transcripts_path'], transcripts)
+            if 'text' in args['modality']:
+            # if False:
+                transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+                save_pk(args['transcripts_path'], transcripts)
+
+            else:
+                transcripts = load_pk(args['transcripts_path'])
 
             # remove wav_segments that have no recognized speech
             no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]
@@ -369,6 +379,7 @@ def load_data():
 
                 maxes += [new_intervals.max()]
                 labels[vid_key]['intervals'] = ar(lzip(maxes[:-1], maxes[1:]))
+                labels[vid_key]['features'] = ar(labels[vid_key]['features']).reshape((-1,1))
 
             transcripts = combined
 
@@ -381,15 +392,31 @@ def load_data():
                 x = np.concatenate([librosa.load(elt)[0] for elt in wav_paths])
                 sf.write(join(recom_dir,f'{vid_key}.wav'),x,sr)
             
-            save_pk(args['transcripts_path'], transcripts)
+            api_key = load_json(join(BASE_PATH, 'azure_secrets.json'))['speaker_verification_key']
+            assert type(args['speaker_profile']) == str
+            speaker_profiles = [args['speaker_profile']]
+
+            if 'text' in args['modality']:
+                for vid_key in unique_vid_keys:
+                    wav_paths = sorted(glob(join(temp_wav_dir,f'{vid_key}[*')), key=lambda elt: int( elt.split('/')[-1].replace(']','').replace('.wav','').split('[')[1] ) )
+                    args['speaker_ver'][vid_key] = []
+                    for wav_path in wav_paths:
+                        try:
+                            results = identify_user(api_key, wav_path, speaker_profiles)['profilesRanking']
+                            args['speaker_ver'][vid_key].append(results[0]['score'])
+                        except:
+                            args['speaker_ver'][vid_key].append(-1)
+
             save_pk(args['labels_path'], labels)
             save_pk(timing_path, labels)
-        
+
         if 'audio' in args['modality']:
             args['wav_dir'] = recom_dir
     
     if 'text' in args['modality']:
-        add_seq(dataset, args['transcripts_path'], 'text')
+        if transcripts is None:
+            transcripts = load_pk(args['transcripts_path'])
+        add_seq(dataset, transcripts, 'text', obj_type='obj')
     
     if 'audio' in args['modality']:
         deploy_unaligned_mfb_csd(check_labels=(args['mode']!='inference'))
@@ -688,7 +715,7 @@ def train_within_multi(train, val, test):
         sample_weight=args['train_sample_weight'],
         epochs=500,
         validation_data=({'text': val_text, 'audio': val_audio}, val_labels, args['val_sample_weight']),
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
+        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
         verbose=1,
     ).history
     eval_history = model.evaluate(
@@ -750,7 +777,7 @@ def train_cross_uni_audio(train, val, test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_data=(val_data, val_labels, val_utt_masks),
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
+        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -828,7 +855,7 @@ def train_within_uni_audio(train, val, test):
         sample_weight=args['train_sample_weight'],
         epochs=args['epochs'],
         validation_data=(val_data, val_labels),
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
+        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -908,7 +935,7 @@ def train_cross_uni_text(train, val, test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_data=(val_data, val_labels, val_utt_masks),
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
+        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
     ).history
     eval_history = model.evaluate(
         x=test_data,
@@ -989,7 +1016,7 @@ def train_within_uni_text(train, val, test):
         batch_size=args['bs'],
         epochs=args['epochs'],
         validation_data=(val_data, val_labels, args['val_sample_weight']),
-        callbacks=[EarlyStopping(monitor='val_sparse_categorical_accuracy', mode='max', patience=15, restore_best_weights=True)],
+        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
     ).history
 
     eval_history = model.evaluate(
@@ -1121,18 +1148,38 @@ def main_inference(args_in):
             
         else:
             for i,id in enumerate(ids):
-                id = id.split('[')[0]
-                print('Utt id:', id)
-                print('Transcript:', a[id])
+                # print('Utt id:', id)
+                # print('Transcript:', a[id])
                 label = np.argmax(preds, axis=-1)[i]
-                print('Pred:', reverse_label_map[label])
-    
+                # print('Pred:', reverse_label_map[label])
+
+            d = {}
+            corrects = test_labels==np.argmax(preds, axis=-1)
+            for id,corr in zip(ids,corrects):
+                k = id.split('[')[0]
+                if k not in d:
+                    d[k] = [corr]
+                else:
+                    d[k].append(corr)
+
+            for k,v in d.items():
+                d[k] = np.sum(v)/len(v)
+
+            print(d)
+            x=2
+
+            df = pd.DataFrame({'id': ids, 'pred': np.argmax(preds, axis=-1), 'label': test_labels, 'correct': (np.argmax(preds, axis=-1)==test_labels).astype('int32')})
+            print(df)
+            save_pk('df.pk', df)
+
+
     print('Your output will be in output/inference.pk')
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
         'utt_masks': None if not args['cross_utterance'] else test_utt_masks,
         'predictions': preds,
         'ids': ids,
+        'speaker_ver': args['speaker_ver']
     }
     return full_res
 
@@ -1157,6 +1204,7 @@ params = [
 
     # core options
     ('--mode',str,'train', 'train or inference'),
+    ('--speaker_profile',str,'', 'profile id of speaker this recording comes from (used for speaker verification in inference mode)'),
     ('--cross_utterance', int, 0, 'If 0, build a within-utterance model.  If 1, build a cross utterance model.'),
     ('--modality', str,'text', 'modalities separated by ,.  options are ["text,audio", "audio,text", "audio", "text"]'),
     ('--evaluate_inference', int, 0, 'If mode==inference and this is 1, evaluate using labels passed in instead of returning prediction.  This can be a good sanity check on the training process if you have labels, and want to see how well your saved model is inferring on some dataset.'),

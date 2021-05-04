@@ -1,0 +1,202 @@
+{
+    "a": {
+        "features": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "b": {
+        "features": [
+            0,
+            1,
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "c": {
+        "features": [
+            0,
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "d": {
+        "features": [
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "e": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "f": {
+        "features": [
+            2,
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "g": {
+        "features": [
+            1,
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "h": {
+        "features": [
+            2
+        ],
+        "intervals": null
+    },
+    "i": {
+        "features": [
+            2,
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "j": {
+        "features": [
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "k": {
+        "features": [
+            1,
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "l": {
+        "features": [
+            0,
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "m": {
+        "features": [
+            0
+        ],
+        "intervals": null
+    },
+    "n": {
+        "features": [
+            0
+        ],
+        "intervals": null
+    },
+    "o": {
+        "features": [
+            2,
+            2,
+            0
+        ],
+        "intervals": null
+    },
+    "p": {
+        "features": [
+            2,
+            0,
+            2
+        ],
+        "intervals": null
+    },
+    "q": {
+        "features": [
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "r": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "s": {
+        "features": [
+            1,
+            1
+        ],
+        "intervals": null
+    },
+    "t": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "u": {
+        "features": [
+            2,
+            2,
+            2
+        ],
+        "intervals": null
+    },
+    "v": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "w": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "x": {
+        "features": [
+            0,
+            0
+        ],
+        "intervals": null
+    },
+    "y": {
+        "features": [
+            2,
+            1
+        ],
+        "intervals": null
+    },
+    "z": {
+        "features": [
+            2,
+            2
+        ],
+        "intervals": null
+    }
+}
