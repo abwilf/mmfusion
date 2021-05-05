@@ -1,4 +1,5 @@
-# general util functions
+# Don't bother reading this!  Just utility functions.
+
 import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit
 import pandas as pd
 import numpy as np
@@ -7,6 +8,23 @@ from os.path import join, exists, isdir
 from tqdm import tqdm
 from itertools import product
 from datetime import datetime
+
+def avg(intervals: np.array, features: np.array) -> np.array:
+    try:
+        return np.average(features, axis=0)
+    except:
+        return features
+
+def csd_to_pk(ds, key, path=None):
+    new_text = {}
+    for k in ds[key].keys():
+        new_text[k] = {
+            'features': ar(ds[key][k]['features']),
+            'intervals': ar(ds[key][k]['intervals']),
+        }
+    if path is not None:
+        save_pk(path, new_text)
+    return new_text
 
 def lvmap(f, arr, axis=None):
     if axis is None:

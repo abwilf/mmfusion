@@ -14,7 +14,6 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 from silence_tensorflow import silence_tensorflow
 silence_tensorflow()
 
-from mfb_util import *
 import multiprocessing.dummy as mp_thread
 import multiprocessing as mp_proc
 from pprint import pprint
@@ -24,9 +23,6 @@ from sklearn.utils import class_weight
 import requests, atexit
 import random
 from notebook_util import setup_no_gpu, setup_one_gpu, setup_gpu
-# setup_one_gpu()
-# setup_no_gpu()
-
 from utils import *
 import tensorflow as tf
 from tensorflow.keras.layers import *
@@ -40,7 +36,6 @@ from tensorflow.keras.activations import *
 from tensorflow.keras.regularizers import l1_l2, l2
 import tensorflow_hub as hub
 import tensorflow_text as text
-# from official.nlp import optimization  # to create AdamW optmizer - only needed if fine tuning
 
 import librosa
 import soundfile as sf
@@ -61,6 +56,14 @@ map_model_to_preprocess = { 'bert_en_uncased_L-12_H-768_A-12': 'https://tfhub.de
 tfhub_handle_encoder = map_name_to_handle[bert_model_name]
 tfhub_handle_preprocess = map_model_to_preprocess[bert_model_name]
 
+
+######### MFB CREATION ######### 
+# Parameters and code to create mfbs from wav files is below
+# get_mfb gets MFBs of shape (timesteps, 40) from a single wav
+# get_mfbs does this with a clamp value and z normalization using statistics from all mfbs being considered
+# get_mfb_intervals gets the timestamps associated with each 40 dimensional vector; timestamps are used in alignment with the lexical modality using CMU-Multimodal-SDK
+# deploy_unaligned_mfb_csd creates all mfbs from a wav directory in args['wav_dir'], parallelized across threads
+
 n_mels = 40
 n_fft = 2048
 hop_length = 160 # mfbs are extracted in intervals of .1 second
@@ -76,10 +79,9 @@ def get_mfb(wav_file):
     y, sr = librosa.load(wav_file, sr=SR)
     y = librosa.effects.preemphasis(y, coef=0.97)
     mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, n_mels=n_mels, hop_length=hop_length, fmin=fmin, fmax=fmax, htk=False)
-    # return np.log(mel_spec.T + EPS)
     return mel_spec.T
 
-def new_get_mfbs(wav_file):
+def get_mfbs(wav_file):
     mfb = get_mfb(wav_file)
     mfb = (mfb - mfb_stats['mean']) / (mfb_stats['std'] + EPS)
     
@@ -99,17 +101,11 @@ def get_mfb_intervals(end, step):
 
     b = np.concatenate([a[1:], [a[-1] + step]], axis=0)
     return np.vstack([a,b]).T
-
-def avg(intervals: np.array, features: np.array) -> np.array:
-    try:
-        return np.average(features, axis=0)
-    except:
-        return features
-        
+ 
 data = {}
 def add_unaligned_mfb(video_key):
     wav_path = join(args['wav_dir'], f'{video_key}.wav')
-    mfbs = new_get_mfbs(wav_path)
+    mfbs = get_mfbs(wav_path)
     intervals = get_mfb_intervals(MFB_WIN_STEP*mfbs.shape[0], MFB_WIN_STEP)
     if not mfbs.shape[0] == intervals.shape[0]:
         save_pk('temp.pk', {'mfbs': mfbs, 'intervals': intervals})
@@ -119,12 +115,6 @@ def add_unaligned_mfb(video_key):
         'features': mfbs,
         'intervals': intervals
     }
-
-mfb_stats = {
-    'mean': [],
-    'std': [],
-    'length': [],
-}
 
 def get_mfb_stats(video_key):
     wav_path = join(args['wav_dir'], f'{video_key}.wav')
@@ -150,6 +140,13 @@ def deploy_unaligned_mfb_csd(check_labels=True):
     print(f'Getting global statistics over mfbs...\n')
     num_workers = 5
     pool = mp_thread.Pool(num_workers)
+
+    global mfb_stats
+    mfb_stats = {
+        'mean': [],
+        'std': [],
+        'length': [],
+    }
 
     # non parallelized
     # for wav_key in tqdm(wav_keys[:10]):
@@ -178,24 +175,18 @@ def deploy_unaligned_mfb_csd(check_labels=True):
     pool.close() 
     pool.join()
 
-    # compseq = mmdatasdk.computational_sequence(csd_name)
-    # compseq.setData(data, csd_name)
-    # metadata_template['root name'] = csd_name
-    # compseq.setMetadata(metadata_template, csd_name)
-    # compseq.deploy(args["audio_path"].replace('.pk', '.csd'))
     save_pk(args['audio_path'].replace('.csd', '.pk'), data)
     return args["audio_path"]
+######### 
 
-def csd_to_pk(ds, key, path=None):
-    new_text = {}
-    for k in ds[key].keys():
-        new_text[k] = {
-            'features': ar(ds[key][k]['features']),
-            'intervals': ar(ds[key][k]['intervals']),
-        }
-    if path is not None:
-        save_pk(path, new_text)
-    return new_text
+
+######### Data Preprocessing and associated helper functions for IEMOCAP  #########
+# *seq() are helper functions for dealing with computational sequence objects (required for CMU-Multimodal-SDK interface)
+# label_map_fn is where I map labels from their original form to their eventual form.  For IEMOCAP, labels start out on a 0-5 scale.  <3 = negative (0), ==3 = neutral (1), >3 = positive (2)
+# load_data is where a lot of the data heavy lifting happens.  
+#   In training, the dataset is aligned and preprocessed into its correct form (depending on cross-utterance vs within-utterance).  BERT embeddings are extracted, the dataset is reshaped, and passed to the model stage
+#   In inference, the same process happens, but first wavs are split by utterance boundaries using the VAD from deepspeech, transcribed using MS azure (utterances with no recognized speech are removed and the others renamed to preserve correct numbering), 
+#     and passed to MS Azure's speaker verification system with the profile_id of the participant to see how likely it was that our participant spoke this utterance (as opposed to someone else)
 
 def get_compseq(path, key_name):
     if 'pk' in path:
@@ -228,9 +219,7 @@ def add_seq(dataset, obj, key_name, obj_type='path'):
     dataset.computational_sequences[key_name] = compseq
 
 ### TODO: MODIFY ##
-# num_labels = 3 # mosei
 num_labels = 3 # iemocap
-# num_labels = 4 # iemocap
 args = {}
 args['num_labels'] = num_labels
 def label_map_fn(labels):
@@ -240,9 +229,8 @@ def label_map_fn(labels):
 
     e.g.:
         iemocap: input = ['ang', 'ang', 'neu', 'hap','sad'], output = [0,0,1,2,3]
-        mosei: input of shape (num_labels,1,7) with values for each of [sentiment,happy,sad,anger,surprise,disgust,fear] . output = [0,1,2] for neg, pos, neu sentiment
     '''
-    if args['mode'] =='inference' and args['evaluate_inference'] and 'iemocap' not in args['transcripts_path']:
+    if args['mode'] =='inference' and args['evaluate_inference']:
         return labels
 
     # # iemocap
@@ -257,14 +245,6 @@ def label_map_fn(labels):
     labels[labels>3]=2
     return labels.astype('int32').reshape((-1))
 
-    # # # mosei
-    # labels = labels[:,0]
-    # labels[labels>0]=2
-    # labels[labels==0]=1
-    # labels[labels<0]=0
-    # return labels.astype('int32')
-###
-
 def load_data():
     if exists(args['tensors_path']) and not args['overwrite_tensors'] and not args['mode']=='inference':
         print('Loading data...')
@@ -275,7 +255,7 @@ def load_data():
     del dataset.computational_sequences['dummy']
     
     labels = load_pk(args['labels_path']) if 'pk' in args['labels_path'] else load_json(args['labels_path'])
-    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) )
+    fake_labels = ( (args['mode'] == 'inference') and (not args['evaluate_inference']) ) # used in inference when evaluation labels are not provided (actual prediction)
     transcripts = None
     if args['mode'] == 'inference':
         # speaker verification
@@ -288,127 +268,120 @@ def load_data():
         temp_wav_dir = args['wav_dir']+'_segments'
         recom_dir = args['wav_dir']+'_recombined'
         
-        if args['only_segment']:
-            rmtree(temp_wav_dir)
-            convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
-            exit()
-   
-        if True:
-        # if 'text' in args['modality']:
-            rmtree(temp_wav_dir)
-            convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
-            assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
+        rmtree(temp_wav_dir)
+        convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
+        assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
 
-            wav_paths = glob(join(temp_wav_dir, '*'))
-            print(f'Transcribing {temp_wav_dir}')
-            if 'text' in args['modality']:
-            # if False:
-                transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
-                save_pk(args['transcripts_path'], transcripts)
+        wav_paths = glob(join(temp_wav_dir, '*'))
+        print(f'Transcribing {temp_wav_dir}')
+        if 'text' in args['modality']:
+        # if False:
+            transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+        else:
+            transcripts = load_pk(args['transcripts_path']) # for activation
 
-            else:
-                transcripts = load_pk(args['transcripts_path'])
+        # save_pk(args['transcripts_path'], transcripts)
 
-            # remove wav_segments that have no recognized speech
-            no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]
-            for elt in no_recognized:
-                rmfile(join(temp_wav_dir, f'{elt}.wav'))
+        # remove wav_segments that have no recognized speech
+        no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]
+        for elt in no_recognized:
+            rmfile(join(temp_wav_dir, f'{elt}.wav'))
 
-            # rename rest
-            unique_videos = set(lmap(lambda elt: elt.split('/')[-1].replace('.wav', '').split('[')[0], glob(join(temp_wav_dir, '*.wav'))))
-            for vid in unique_videos:
-                recognized = [k for k,v in transcripts.items() if len(v['features'])>0 and k.split('[')[0] == vid]
-                recognized = sorted(recognized, key=lambda elt: int(elt.replace(']','').split('[')[1]))
+        # rename rest
+        unique_videos = set(lmap(lambda elt: elt.split('/')[-1].replace('.wav', '').split('[')[0], glob(join(temp_wav_dir, '*.wav'))))
+        for vid in unique_videos:
+            recognized = [k for k,v in transcripts.items() if len(v['features'])>0 and k.split('[')[0] == vid]
+            recognized = sorted(recognized, key=lambda elt: int(elt.replace(']','').split('[')[1]))
 
-                unrecognized = [k for k,v in transcripts.items() if len(v['features'])==0 and k.split('[')[0] == vid]
-                
-                idxs = np.arange(len(recognized))
-                
-                orig_new = [(k, f'{k.split("[")[0]}[{idx}]') for k,idx in zip(recognized, idxs)]
-                unrecognized = [elt for elt in unrecognized if elt not in lzip(*orig_new)[1]] # filter only down to overflow - intermediate stuff will be overwritten
+            unrecognized = [k for k,v in transcripts.items() if len(v['features'])==0 and k.split('[')[0] == vid]
+            
+            idxs = np.arange(len(recognized))
+            
+            orig_new = [(k, f'{k.split("[")[0]}[{idx}]') for k,idx in zip(recognized, idxs)]
+            unrecognized = [elt for elt in unrecognized if elt not in lzip(*orig_new)[1]] # filter only down to overflow - intermediate stuff will be overwritten
 
-                # move wavs, transcripts keys
-                for orig, new in orig_new:
-                    shutil.move(join(temp_wav_dir, f'{orig}.wav'), join(temp_wav_dir, f'{new}.wav'))
-                    transcripts[new] = transcripts[orig]
-                    if new != orig:
-                        del transcripts[orig]
-                for unr in unrecognized:
-                    del transcripts[unr]
+            # move wavs, transcripts keys
+            for orig, new in orig_new:
+                shutil.move(join(temp_wav_dir, f'{orig}.wav'), join(temp_wav_dir, f'{new}.wav'))
+                transcripts[new] = transcripts[orig]
+                if new != orig:
+                    del transcripts[orig]
+            for unr in unrecognized:
+                del transcripts[unr]
 
-            # grab labels to realign dummy intervals
-            if fake_labels:
-                labels = {}
+        # grab labels to realign dummy intervals
+        if fake_labels:
+            labels = {}
 
-            # recombine transcripts to be a single "video" key
-            b = transcripts
-            unique_vid_keys = np.unique(lmap(lambda elt: elt.split('[')[0], lkeys(b)))
-            combined = {}
+        # recombine transcripts to be a single "video" key for cross utterance
+        b = transcripts
+        unique_vid_keys = np.unique(lmap(lambda elt: elt.split('[')[0], lkeys(b)))
+        combined = {}
 
-            for vid_key in unique_vid_keys:
-                sorted_rel_keys = sorted(lfilter(lambda elt: vid_key in elt.split('[')[0], lkeys(b)), key=lambda elt: int(elt.replace(']','').split('[')[1]))
+        for vid_key in unique_vid_keys:
+            sorted_rel_keys = sorted(lfilter(lambda elt: vid_key in elt.split('[')[0], lkeys(b)), key=lambda elt: int(elt.replace(']','').split('[')[1]))
 
-                new_intervals = []
-                maxes = [] # for recreating intervals
-                for i in range(len(sorted_rel_keys)):
-                    new_max = np.max(np.concatenate(new_intervals)) if i > 0 else 0
-                    maxes.append(new_max)
+            new_intervals = []
+            maxes = [] # for recreating intervals
+            for i in range(len(sorted_rel_keys)):
+                new_max = np.max(np.concatenate(new_intervals)) if i > 0 else 0
+                maxes.append(new_max)
 
-                    intervals_to_add = b[sorted_rel_keys[i]]['intervals']
+                intervals_to_add = b[sorted_rel_keys[i]]['intervals']
 
-                    if fake_labels:
-                        if vid_key not in labels:
-                            labels[vid_key] = {
-                                'features': ar([ [1] for _ in range(len(sorted_rel_keys))]),
-                                'intervals': []
-                            }
+                if fake_labels:
+                    if vid_key not in labels:
+                        labels[vid_key] = {
+                            'features': ar([ [1] for _ in range(len(sorted_rel_keys))]),
+                            'intervals': []
+                        }
 
-                    # get the length of the file so the added intervals at the end to not lose time
-                    x,sr = librosa.load(join(temp_wav_dir, f'{vid_key}[{i}].wav'))
-                    intervals_to_add[-1,-1] = x.shape[0]/sr
-                    intervals_to_add = intervals_to_add + new_max
-                    new_intervals.append(intervals_to_add)
+                # get the length of the file so the added intervals at the end to not lose time
+                x,sr = librosa.load(join(temp_wav_dir, f'{vid_key}[{i}].wav'))
+                intervals_to_add[-1,-1] = x.shape[0]/sr
+                intervals_to_add = intervals_to_add + new_max
+                new_intervals.append(intervals_to_add)
 
-                new_intervals = np.concatenate(new_intervals)
+            new_intervals = np.concatenate(new_intervals)
 
-                assert np.all(np.argsort(new_intervals[:,1]) == np.arange(new_intervals.shape[0])) and np.all(np.argsort(new_intervals[:,0]) == np.arange(new_intervals.shape[0])), f'New intervals must be sorted properly after recombining: {new_intervals}'
-                combined[vid_key] = {
-                    'features': np.concatenate([ b[rel_key]['features'] for rel_key in sorted_rel_keys ]),
-                    'intervals': new_intervals,
-                }
+            assert np.all(np.argsort(new_intervals[:,1]) == np.arange(new_intervals.shape[0])) and np.all(np.argsort(new_intervals[:,0]) == np.arange(new_intervals.shape[0])), f'New intervals must be sorted properly after recombining: {new_intervals}'
+            combined[vid_key] = {
+                'features': np.concatenate([ b[rel_key]['features'] for rel_key in sorted_rel_keys ]),
+                'intervals': new_intervals,
+            }
 
-                maxes += [new_intervals.max()]
-                labels[vid_key]['intervals'] = ar(lzip(maxes[:-1], maxes[1:]))
-                labels[vid_key]['features'] = ar(labels[vid_key]['features']).reshape((-1,1))
+            maxes += [new_intervals.max()]
+            labels[vid_key]['intervals'] = ar(lzip(maxes[:-1], maxes[1:]))
+            labels[vid_key]['features'] = ar(labels[vid_key]['features']).reshape((-1,1))
 
-            transcripts = combined
+        transcripts = combined
 
-            # recombine wavs
-            rmtree(recom_dir)
-            mkdirp(recom_dir)
+        # recombine wavs
+        rmtree(recom_dir)
+        mkdirp(recom_dir)
+        for vid_key in unique_vid_keys:
+            wav_paths = sorted(glob(join(temp_wav_dir,f'{vid_key}[*')), key=lambda elt: int( elt.split('/')[-1].replace(']','').replace('.wav','').split('[')[1] ) )
+            sr = librosa.load(wav_paths[0])[1]
+            x = np.concatenate([librosa.load(elt)[0] for elt in wav_paths])
+            sf.write(join(recom_dir,f'{vid_key}.wav'),x,sr)
+        
+        api_key = load_json(join(BASE_PATH, 'azure_secrets.json'))['speaker_verification_key']
+        assert type(args['speaker_profile']) == str
+        speaker_profiles = [args['speaker_profile']]
+
+        if 'text' in args['modality']:
             for vid_key in unique_vid_keys:
                 wav_paths = sorted(glob(join(temp_wav_dir,f'{vid_key}[*')), key=lambda elt: int( elt.split('/')[-1].replace(']','').replace('.wav','').split('[')[1] ) )
-                sr = librosa.load(wav_paths[0])[1]
-                x = np.concatenate([librosa.load(elt)[0] for elt in wav_paths])
-                sf.write(join(recom_dir,f'{vid_key}.wav'),x,sr)
-            
-            api_key = load_json(join(BASE_PATH, 'azure_secrets.json'))['speaker_verification_key']
-            assert type(args['speaker_profile']) == str
-            speaker_profiles = [args['speaker_profile']]
+                args['speaker_ver'][vid_key] = []
+                for wav_path in wav_paths:
+                    try:
+                        results = identify_user(api_key, wav_path, speaker_profiles)['profilesRanking']
+                        args['speaker_ver'][vid_key].append(results[0]['score'])
+                    except:
+                        args['speaker_ver'][vid_key].append(-1)
 
-            if 'text' in args['modality']:
-                for vid_key in unique_vid_keys:
-                    wav_paths = sorted(glob(join(temp_wav_dir,f'{vid_key}[*')), key=lambda elt: int( elt.split('/')[-1].replace(']','').replace('.wav','').split('[')[1] ) )
-                    args['speaker_ver'][vid_key] = []
-                    for wav_path in wav_paths:
-                        try:
-                            results = identify_user(api_key, wav_path, speaker_profiles)['profilesRanking']
-                            args['speaker_ver'][vid_key].append(results[0]['score'])
-                        except:
-                            args['speaker_ver'][vid_key].append(-1)
-
-            save_pk(args['labels_path'], labels)
-            save_pk(timing_path, labels)
+        save_pk(args['labels_path'], labels)
+        save_pk(timing_path, labels)
 
         if 'audio' in args['modality']:
             args['wav_dir'] = recom_dir
@@ -647,7 +620,11 @@ def load_data():
     else:
         save_pk('./.temp_tensors.pk', tensors)
     return train, val, test
-    
+######### End data processing
+
+######### Models #########
+# We built support for different kinds of models - ones that considered within utterance or cross utterance context unimodally (audio xor text) and multimodally (audio + text)
+
 def train_cross_multi(train, val, test):
     train_text, train_audio, train_labels, train_utt_masks, train_ids = train
     val_text, val_audio, val_labels, val_utt_masks, val_ids = val
@@ -1038,6 +1015,8 @@ def train_within_uni_text(train, val, test):
     }
     return res
 
+######### End models #########
+
 def main(args_in):
     global args
     args = args_in
@@ -1065,7 +1044,7 @@ def main_inference(args_in):
     global args
     args = args_in
 
-    _,_, test = load_data() # only consider test data with dummy labels
+    _,_, test = load_data()
 
     print('Predicting...')
     if not args['cross_utterance']: # within
@@ -1124,8 +1103,6 @@ def main_inference(args_in):
     
     if args['print_transcripts']:
         a = {k: ' '.join(v['features'].reshape(-1)) for k,v in load_pk(args['transcripts_path']).items()}
-        label_map = {'ang': 0, 'hap': 1, 'neu': 2, 'sad': 3}
-        # reverse_label_map = ['ang', 'hap', 'neu', 'sad']
         reverse_label_map = [0,1,2]
         if args['cross_utterance']:
             utt_masks = np.sum(test_utt_masks, axis=-1).astype('int32')
@@ -1147,12 +1124,6 @@ def main_inference(args_in):
             df = df[['vid_ids', 'utt_ids', 'text', 'correct', 'pred', 'label']]
             
         else:
-            for i,id in enumerate(ids):
-                # print('Utt id:', id)
-                # print('Transcript:', a[id])
-                label = np.argmax(preds, axis=-1)[i]
-                # print('Pred:', reverse_label_map[label])
-
             d = {}
             corrects = test_labels==np.argmax(preds, axis=-1)
             for id,corr in zip(ids,corrects):
@@ -1165,13 +1136,9 @@ def main_inference(args_in):
             for k,v in d.items():
                 d[k] = np.sum(v)/len(v)
 
-            print(d)
-            x=2
-
             df = pd.DataFrame({'id': ids, 'pred': np.argmax(preds, axis=-1), 'label': test_labels, 'correct': (np.argmax(preds, axis=-1)==test_labels).astype('int32')})
             print(df)
             save_pk('df.pk', df)
-
 
     print('Your output will be in output/inference.pk')
     full_res = {
@@ -1210,10 +1177,9 @@ params = [
     ('--evaluate_inference', int, 0, 'If mode==inference and this is 1, evaluate using labels passed in instead of returning prediction.  This can be a good sanity check on the training process if you have labels, and want to see how well your saved model is inferring on some dataset.'),
     ('--overwrite_tensors', int, 0, 'Do you want to overwrite tensors in tensors_path or not?  By default, we will use tensors we find in tensors_path instead of regenerating.'),
     ('--overwrite_mfbs', int, 0, 'Do you want to overwrite the mfbs in audio_path by recreating the mfbs from wav_dir?'),
-    ('--keys_path',str, join(ie_path, 'keys.json'), '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
+    ('--keys_path',str, '', '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
     ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
     ('--VAD_agg',int, 0, 'Aggressiveness of VAD during inference'),
-    ('--only_segment',int, 0, 'Only segment wavs (used for human labelling)'),
 
     # hyperparameters
     ('--epochs', int, 500, ''),
@@ -1280,8 +1246,6 @@ if __name__ == '__main__':
                     full_res[k].append(v)
             
         full_res = {k:ar(v) for k,v in full_res.items()}
-        # full_res['train_keys'] = args['train_keys']
-        # full_res['test_keys'] = args['test_keys']
         save_json(join(out_dir, 'results.txt'), full_res)
 
     else:

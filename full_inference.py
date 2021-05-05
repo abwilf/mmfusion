@@ -8,26 +8,34 @@ def full_inference(speaker_profile):
         **default,
         'modality': 'text,audio',
         'tensors_path': 'tensors.pk',
+        'overwrite_mfbs': 1,
+        'mode': 'inference',
+        'print_transcripts': 1,
+        'seq_len': 150,
+        'model_path': 'val_model',
+        'cross_utterance': 0,
+        'num_labels': num_labels,
+        'speaker_profile': speaker_profile,
+        
+        ## IF predicting
+        # 'evaluate_inference': 0,
+        # 'labels_path': '',
+        # 'transcripts_path': 'preds/transcripts.pk',
+        # 'audio_path': 'preds/mfb.pk',
+        # 'wav_dir': 'preds/wavs',
+
+        ## IF testing
+        'labels_path': 'test_data/val_utt_labels.json',
+        'evaluate_inference': 1,
         'transcripts_path': 'test_data/transcripts.pk',
         'audio_path': 'test_data/mfb.pk',
         'wav_dir': 'test_data/wavs',
-        'overwrite_mfbs': 1,
-        'mode': 'inference',
-        'evaluate_inference': 0,
-        'print_transcripts': 0,
-        'seq_len': 150,
-        'hffn_path': 'val_model',
-        'train_keys': [],
-        'cross_utterance': 1,
-        'num_labels': num_labels,
-        'speaker_profile': speaker_profile,
     }
     rmfile(args['audio_path'])
-    rmfile(args['transcripts_path'])
     val_inf = main_inference(args)
 
     # reshaping from cross utterance format
-    preds = val_inf['predictions']*val_inf['utt_masks'][:,:,None]
+    preds = val_inf['predictions']
     ids = val_inf['ids']
     speaker_ver = val_inf['speaker_ver']
     rmfile(args['tensors_path'])
@@ -40,21 +48,23 @@ def full_inference(speaker_profile):
         'transcripts_path': 'test_data/transcripts.pk',
         'audio_path': 'test_data/mfb.pk',
         'wav_dir': 'test_data/wavs',
-        'overwrite_mfbs': 0,
+        'overwrite_mfbs': 1,
         'mode': 'inference',
         'evaluate_inference': 0,
-        'print_transcripts': 0,
+        'print_transcripts': 1,
         'seq_len': 35000,
         'model_path': 'act_model',
-        'train_keys': [],
         'cross_utterance': 0,
         'num_labels': num_labels,
-        'speaker_profile': ''
+        'speaker_profile': '',
+        
+        'labels_path': 'test_data/act_utt_labels.json',
+        'evaluate_inference': 1,
     }
     act_inf = main_inference(args)
 
     rmfile(args['tensors_path'])
-    rmfile(args['transcripts_path'])
+    # rmfile(args['transcripts_path'])
 
     res = {
         'val': preds,

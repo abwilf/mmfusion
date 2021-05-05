@@ -31,7 +31,7 @@ MMSDK_PATH = '/z/abwilf/CMU-MultimodalSDK/'
 BASE_PATH = '/z/abwilf/mmf' # the path to this directory
 ```
 
-Create and save a file called `azure_secrets.json`, with the following code inside.  If you decide to use azure for speech recognition in the future, this is where your API information will go.
+Create and save a file called `azure_secrets.json`, with the following code inside.  If you decide to use azure for speech recognition in the future, this is where your API information will go.  If you are using this from the CHAI lab, contact me for our keys.
 ```
 {
     "cognitive_key": "temp",
