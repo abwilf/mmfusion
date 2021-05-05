@@ -21,8 +21,6 @@ iemocap_test_data
 
 test_data/wavs_segments
 test_data/wavs_recombined
-act_model/
-val_model/
 
 preprocess_iemocap.py
 
@@ -31,3 +29,4 @@ df.pk
 inference.pk
 launch_codes.py
 output.pk
+preds/*

@@ -18,18 +18,18 @@ def full_inference(speaker_profile):
         'speaker_profile': speaker_profile,
         
         ## IF predicting
-        # 'evaluate_inference': 0,
-        # 'labels_path': '',
-        # 'transcripts_path': 'preds/transcripts.pk',
-        # 'audio_path': 'preds/mfb.pk',
-        # 'wav_dir': 'preds/wavs',
+        'evaluate_inference': 0,
+        'labels_path': '',
+        'transcripts_path': 'preds/transcripts.pk',
+        'audio_path': 'preds/mfb.pk',
+        'wav_dir': 'preds/wavs',
 
         ## IF testing
-        'evaluate_inference': 1,
-        'labels_path': 'test_data/val_utt_labels.json',
-        'transcripts_path': 'test_data/transcripts.pk',
-        'audio_path': 'test_data/mfb.pk',
-        'wav_dir': 'test_data/wavs',
+        # 'evaluate_inference': 1,
+        # 'labels_path': 'test_data/val_utt_labels.json',
+        # 'transcripts_path': 'test_data/transcripts.pk',
+        # 'audio_path': 'test_data/mfb.pk',
+        # 'wav_dir': 'test_data/wavs',
     }
     rmfile(args['audio_path'])
     val_inf = main_inference(args)
