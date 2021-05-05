@@ -261,7 +261,7 @@ def load_data():
         # speaker verification
         args['speaker_ver'] = {} # vid: [ [{profile_id: 'profile id', score: 'score' for all profile_ids in rank order] for _ in num_utts]
         
-        timing_path = '/'.join(args['labels_path'].split('/')[:-1])+'/timing.pk'
+        timing_path = '/'.join(args['transcripts_path'].split('/')[:-1])+'/timing.pk'
 
         if args['wav_dir'][-1]=='/':
             args['wav_dir'] = args['wav_dir'][:-1]
@@ -277,10 +277,10 @@ def load_data():
         if 'text' in args['modality']:
         # if False:
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
+            save_pk(args['transcripts_path'], transcripts)
         else:
             transcripts = load_pk(args['transcripts_path']) # for activation
 
-        # save_pk(args['transcripts_path'], transcripts)
 
         # remove wav_segments that have no recognized speech
         no_recognized = [k for k,v in transcripts.items() if len(v['features'])==0]

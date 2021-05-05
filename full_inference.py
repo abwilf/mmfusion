@@ -25,8 +25,8 @@ def full_inference(speaker_profile):
         # 'wav_dir': 'preds/wavs',
 
         ## IF testing
-        'labels_path': 'test_data/val_utt_labels.json',
         'evaluate_inference': 1,
+        'labels_path': 'test_data/val_utt_labels.json',
         'transcripts_path': 'test_data/transcripts.pk',
         'audio_path': 'test_data/mfb.pk',
         'wav_dir': 'test_data/wavs',
@@ -35,8 +35,8 @@ def full_inference(speaker_profile):
     val_inf = main_inference(args)
 
     # reshaping from cross utterance format
-    preds = val_inf['predictions']
-    ids = val_inf['ids']
+    val_preds = val_inf['predictions']
+    val_ids = val_inf['ids']
     speaker_ver = val_inf['speaker_ver']
     rmfile(args['tensors_path'])
 
@@ -45,12 +45,8 @@ def full_inference(speaker_profile):
         **default,
         'modality': 'audio',
         'tensors_path': 'tensors.pk',
-        'transcripts_path': 'test_data/transcripts.pk',
-        'audio_path': 'test_data/mfb.pk',
-        'wav_dir': 'test_data/wavs',
         'overwrite_mfbs': 1,
         'mode': 'inference',
-        'evaluate_inference': 0,
         'print_transcripts': 1,
         'seq_len': 35000,
         'model_path': 'act_model',
@@ -60,21 +56,45 @@ def full_inference(speaker_profile):
         
         'labels_path': 'test_data/act_utt_labels.json',
         'evaluate_inference': 1,
+
+        ## IF predicting
+        'evaluate_inference': 0,
+        'labels_path': '',
+        'transcripts_path': 'preds/transcripts.pk',
+        'audio_path': 'preds/mfb.pk',
+        'wav_dir': 'preds/wavs',
+
+        ## IF testing
+        # 'evaluate_inference': 1,
+        # 'labels_path': 'test_data/val_utt_labels.json',
+        # 'transcripts_path': 'test_data/transcripts.pk',
+        # 'audio_path': 'test_data/mfb.pk',
+        # 'wav_dir': 'test_data/wavs',
+
     }
     act_inf = main_inference(args)
 
     rmfile(args['tensors_path'])
     # rmfile(args['transcripts_path'])
 
+
+    def get_three_bin(arr):
+        return lmap(lambda elt: ';'.join(elt.astype(str)), np.round(arr, decimals=4))
+
     res = {
-        'val': preds,
-        'val_ids': ids,
-        'act': act_inf['predictions'],
+        'val': get_three_bin(val_preds),
+        'val_ids': val_ids,
+        'act': get_three_bin(act_inf['predictions']),
         'act_ids': act_inf['ids'],
         'speaker_ver': speaker_ver
     }
-    rmfile(args['audio_path'])
-    save_pk('output.pk', res)
+
+    # WIPE PREDS
+    shutil.rmtree('preds')
+    os.mkdir('preds')
+
+    return res
+
 
 
 if __name__ == '__main__':

@@ -1,13 +1,9 @@
 import requests, json, librosa, argparse
+from utils import load_json
 import soundfile as sf
 
 def lmap(fn, iterable):
     return list(map(fn, iterable))
-
-def load_json(file_stub):
-    filename = file_stub
-    with open(filename) as json_file:
-        return json.load(json_file)
 
 def create_profile(api_key, region='eastus'):
     '''
@@ -122,16 +118,18 @@ if __name__ == '__main__':
     parser.add_argument('--secrets_path', type=str, default='./secrets.json', help='Contains api_key for Azure speech service')
     args = parser.parse_args()
 
-    resample_audio(args.wav_path, args.temp_path)
 
     api_key = load_json(args.secrets_path)['speaker_verification_key']
     region = 'eastus'
 
-    profile_id = create_profile(api_key, region)
+    print(list_users(api_key))    
+    
+    # profile_id = create_profile(api_key, region)
+    # print(f'Profile id is:\n{profile_id}')
 
-    print(f'Profile id is:\n{profile_id}')
 
-    res = enroll_user(api_key, args.wav_path, profile_id)
+    # resample_audio(args.wav_path, args.temp_path)
+    # res = enroll_user(api_key, args.wav_path, profile_id)
     print(f'Enrollment successful!')
 
 
