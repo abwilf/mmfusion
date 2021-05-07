@@ -1,6 +1,5 @@
 # Don't bother reading this!  Just utility functions.
-
-import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit
+import shutil, os, pathlib, pickle, sys, math, importlib, json.tool, argparse, requests, atexit, builtins
 import pandas as pd
 import numpy as np
 from glob import glob
@@ -8,6 +7,14 @@ from os.path import join, exists, isdir
 from tqdm import tqdm
 from itertools import product
 from datetime import datetime
+from sklearn.utils import class_weight
+
+def get_sample_weight(labels,class_weights=None):
+    labels = labels.astype('int32')
+    if class_weights is None:
+        class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(labels).astype('int32'), y=labels)
+    sample_weight = lvmap(lambda elt: class_weights[elt], labels)
+    return sample_weight
 
 def avg(intervals: np.array, features: np.array) -> np.array:
     try:
@@ -333,41 +340,6 @@ def zero_pad_to_length(data, length):
         return data
     else:
         return np.pad(data, ((0,padAm), (0,0)), 'constant')
-
-def paths_to_mfbs(paths, max_len):
-    '''Get normalized & padded mfbs from paths'''
-    # normalize
-    mfbs = None
-    for file_name in paths:
-        if mfbs is None:
-            mfbs = np.array(np.load(file_name))
-        else:
-            mfbs = np.concatenate([mfbs, np.load(file_name)], axis=0)
-    mean_vec = np.mean(mfbs, axis=0)
-    std_vec  = np.std(mfbs, axis=0)
-
-    # concat & pad
-    mfbs = None
-    for file_name in paths:
-        mfb = (np.load(file_name) - mean_vec) / (std_vec + np.ones_like(std_vec)*1e-3)
-        if mfbs is None:
-            mfbs = np.array([zero_pad_to_length(mfb, max_len)])
-        else:
-            mfbs = np.concatenate([mfbs, [zero_pad_to_length(mfb, max_len)]], axis=0)
-    return tf.cast(mfbs, tf.float64)
-
-def destring(y, width=3):
-    ''' y is an array with elements in the format '.5;.5;0.'.  Need to turn into nx3 arr'''
-    y = np.array(y)
-    y_new = np.zeros((len(y), width))
-    for i in range(len(y)):
-        if '[0.333' in y[i]:
-            y_new[i] = [.333, .333, .333]
-            continue
-        assert ';' in y[i] or ' ' in y[i]
-        char = ';' if ';' in y[i] else None
-        y_new[i] = list(map(lambda elt: float(elt), y[i].split(char)))
-    return y_new
 
 def get_batch(arr, batch_idx, batch_size):
     return arr[batch_idx * batch_size:(batch_idx + 1) * batch_size]

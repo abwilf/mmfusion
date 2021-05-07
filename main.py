@@ -1,5 +1,10 @@
 from utils import *
 from consts import *
+
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+from silence_tensorflow import silence_tensorflow
+silence_tensorflow()
+
 sys.path.append(MMSDK_PATH)
 from mmsdk import mmdatasdk
 sys.path.append(STANDARD_GRID_PATH)
@@ -9,17 +14,11 @@ import copy
 import hashlib
 import soundfile as sf
 import librosa
-
-os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
-from silence_tensorflow import silence_tensorflow
-silence_tensorflow()
-
 import multiprocessing.dummy as mp_thread
 import multiprocessing as mp_proc
 from pprint import pprint
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, precision_score, recall_score, classification_report
-from sklearn.utils import class_weight
 import requests, atexit
 import random
 from notebook_util import setup_no_gpu, setup_one_gpu, setup_gpu
@@ -47,6 +46,8 @@ import convert
 
 from transcribe import *
 from speaker_verification import *
+from models import *
+
 
 metadata_template = { "root name": '', "computational sequence description": '', "computational sequence version": '', "alignment compatible": '', "dataset name": '', "dataset version": '', "creator": '', "contact": '', "featureset bib citation": '', "dataset bib citation": ''}
 
@@ -62,7 +63,7 @@ tfhub_handle_preprocess = map_model_to_preprocess[bert_model_name]
 # get_mfb gets MFBs of shape (timesteps, 40) from a single wav
 # get_mfbs does this with a clamp value and z normalization using statistics from all mfbs being considered
 # get_mfb_intervals gets the timestamps associated with each 40 dimensional vector; timestamps are used in alignment with the lexical modality using CMU-Multimodal-SDK
-# deploy_unaligned_mfb_csd creates all mfbs from a wav directory in args['wav_dir'], parallelized across threads
+# deploy_unaligned_mfb_csd creates all mfbs from a wav directory in args['wav_dir'], parallelized across threads, saves pickle file (can load with load_pk) in args['audio_path']
 
 n_mels = 40
 n_fft = 2048
@@ -180,7 +181,45 @@ def deploy_unaligned_mfb_csd(check_labels=True):
 ######### 
 
 
-######### Data Preprocessing and associated helper functions for IEMOCAP  #########
+######### BERT EMBEDDINGS #########
+# 
+# text_tensor is a tensor of shape (num_utterances, seq_len), where all unused places contain '0.0' (a quirk of CMU-Multimodal-SDK alignment with strings)
+# e.g.: if you had a dataset with two utterances and a sequence length of ten, this function expects an array of shape (2,10), looking perhaps like this:
+# 
+# array([['how', 'is', 'your', 'day', '0.0', '0.0', '0.0', '0.0', '0.0',
+#         '0.0'],
+#     ['i', "don't", 'know', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0',
+#         '0.0']], dtype='<U32')
+#     
+# you will receive an array of shape (num_utterances,128,512).  128 is the sequence length bert returns, and 512 is the dimensionality of each 
+# word vector, zero-filling the elements that do not exist (e.g. text[0,3] would be a normal 512 vector, but text[0,4] would be all zeros because the utterance ends after "day"
+# 
+
+def get_bert_embeddings(text_tensor):
+    # convert between datatypes
+    text = np.apply_along_axis(lambda row: b' '.join(row) if 'S' in str(row.dtype) else b' '.join(lmap(lambda elt: elt.encode('ascii'), row)), -1, np.squeeze(text_tensor))
+    v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
+    text = v(text)
+
+    print('Loading bert model and converting words to embeddings...')
+    bert_preprocess_model = hub.KerasLayer(tfhub_handle_preprocess)
+    bert_model = hub.KerasLayer(tfhub_handle_encoder)
+    
+    encodings = []
+    for sentence in tqdm(text):
+        preprocessed = bert_preprocess_model([sentence])
+        num_words = np.squeeze(np.sum(preprocessed['input_mask'], axis=-1))
+
+        encoded = np.squeeze(bert_model(preprocessed)['sequence_output'].numpy())
+        encoded[num_words:] = 0
+
+        encodings.append(encoded)
+    text = np.squeeze(arlist(encodings))
+    return text
+
+######### End BERT
+
+######### Data Preprocessing and associated helper functions  #########
 # *seq() are helper functions for dealing with computational sequence objects (required for CMU-Multimodal-SDK interface)
 # label_map_fn is where I map labels from their original form to their eventual form.  For IEMOCAP, labels start out on a 0-5 scale.  <3 = negative (0), ==3 = neutral (1), >3 = positive (2)
 # load_data is where a lot of the data heavy lifting happens.  
@@ -218,33 +257,6 @@ def add_seq(dataset, obj, key_name, obj_type='path'):
         compseq = get_compseq_obj(obj, key_name)
     dataset.computational_sequences[key_name] = compseq
 
-### TODO: MODIFY ##
-num_labels = 3 # iemocap
-args = {}
-args['num_labels'] = num_labels
-def label_map_fn(labels):
-    '''
-    input: a one-dimensional array of labels (e.g., shape (10,...))
-    output: a one-dimensional array of labels as integers
-
-    e.g.:
-        iemocap: input = ['ang', 'ang', 'neu', 'hap','sad'], output = [0,0,1,2,3]
-    '''
-    if args['mode'] =='inference' and args['evaluate_inference']:
-        return labels
-
-    # # iemocap
-    # label_map = {'ang': 0, 'hap': 1, 'exc': 1, 'neu': 2, 'sad': 3}
-    # if len(labels.shape) > 1:
-    #     labels = np.squeeze(labels, axis=1)
-    # return arlmap(lambda elt: label_map[elt.decode('utf8') if type(elt) in [bytes, np.bytes_] else elt], labels).astype('int32')
-
-    ## iemocap val
-    labels[labels<3]=0
-    labels[labels==3]=1
-    labels[labels>3]=2
-    return labels.astype('int32').reshape((-1))
-
 def load_data():
     if exists(args['tensors_path']) and not args['overwrite_tensors'] and not args['mode']=='inference':
         print('Loading data...')
@@ -275,7 +287,7 @@ def load_data():
         wav_paths = glob(join(temp_wav_dir, '*'))
         print(f'Transcribing {temp_wav_dir}')
         if 'text' in args['modality']:
-        # if False:
+        if False:
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
             save_pk(args['transcripts_path'], transcripts)
         else:
@@ -429,190 +441,51 @@ def load_data():
         folds=None
     )[0]
 
-    if args['cross_utterance']:
-        print('Reshaping data as cross utterance in the shape (num_vids, max_utts, 128, 512)...')
-        audio, text, labels, utt_masks = [], [], [], []
+    labels = (tensors['labels'] if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])).reshape(-1)
+    ids = np.squeeze(tensors['ids'])
+    text = tensors['text']
 
-        vid_keys = lvmap(lambda elt: elt.split('[')[0], tensors['ids'].reshape(-1))
-        max_utts = np.unique(vid_keys, return_counts=True)[1].max()
-        unique_vid_keys = pd.Series(vid_keys).unique()
+    if args['mode'] == 'inference':
+        args['test_keys'] = np.squeeze(tensors['ids'])
+        args['train_keys'] = ar([])
 
-        if args['mode'] == 'inference':
-            args['test_keys'] = np.squeeze(unique_vid_keys)
-            args['train_keys'] = ar([])
-
-        elif args['train_keys'] is None:
-            args['train_keys'], args['test_keys'] = train_test_split(unique_vid_keys, test_size=.2, random_state=11)
-
-        train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], unique_vid_keys))[0]
-
-        if args['mode'] == 'inference':
-            train_idxs, val_idxs = ar([]).astype('int32'), ar([]).astype('int32')
-        else:
-            train_idxs, val_idxs = train_test_split(train_idxs, test_size=.2, random_state=11)
-
-        test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], unique_vid_keys))[0]
-        assert len(train_idxs) + len(val_idxs) + len(test_idxs) == len(unique_vid_keys), 'If this assertion fails, it means not all video keys were accounted for in the keys provided'
-
-        for vid_key in unique_vid_keys:
-            vid_idxs = np.where(vid_keys==vid_key)[0]
-            num_utts = len(vid_idxs)
-            
-            if 'text' in args['modality']:
-                relevant_text = np.squeeze(tensors['text'][vid_idxs], axis=-1)
-                utt_padded_text = np.pad(relevant_text, ((0,max_utts-num_utts), (0,0)), 'constant')
-                text.append(utt_padded_text)
-            
-            if 'audio' in args['modality']:
-                relevant_audio = tensors['audio'][vid_idxs]
-                utt_padded_audio = np.pad(relevant_audio, ((0,max_utts-num_utts), (0,0), (0,0)), 'constant')
-                audio.append(utt_padded_audio)
-
-            if not fake_labels:
-                relevant_labels = np.squeeze(tensors['labels'][vid_idxs]).reshape((num_utts,-1))
-                relevant_labels = label_map_fn(relevant_labels).reshape(-1)
-                utt_padded_labels = np.pad(relevant_labels, ((0,max_utts-num_utts)), 'constant')
-                labels.append(utt_padded_labels)
-            
-            utt_mask = np.ones(max_utts)
-            utt_mask[num_utts:] = 0
-            utt_masks.append(utt_mask)
+    if args['train_keys'] is None:
+        args['train_keys'], args['test_keys'] = train_test_split(np.squeeze(tensors['ids']), test_size=.2, random_state=11)
         
-        # get text in sentence form: (num_vids, max_utts)
-        text = np.apply_along_axis(lambda row: b' '.join(row) if 'S' in str(row.dtype) else b' '.join(lmap(lambda elt: elt.encode('ascii'), row)), -1, text)
-        v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
-        text = v(text)
-        
-        del dataset
+    train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], np.squeeze(tensors['ids'])))[0]
+    if args['mode'] == 'inference':
+        train_idxs, val_idxs = ar([]).astype('int32'), ar([]).astype('int32')
+    else:
+        train_idxs, val_idxs = train_test_split(train_idxs, test_size=.2, random_state=11)
 
-        if fake_labels:
-            modality = text if text.shape != () else audio
-            labels = np.ones(ar(modality).shape[0:2])
+    test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], np.squeeze(tensors['ids'])))[0]
+    assert len(train_idxs) + len(val_idxs) + len(test_idxs) == len(tensors['ids']), 'If this assertion fails, it means not all utterance keys were accounted for in the keys provided'
 
-        if 'text' in args['modality']:
-            print('Loading bert model and converting words to embeddings...')
-            bert_preprocess_model = hub.KerasLayer(tfhub_handle_preprocess)
-            bert_model = hub.KerasLayer(tfhub_handle_encoder)
+    if 'text' in args['modality']:
+        text = get_bert_embeddings(text)
 
-            new_data = []
-            for utt_mask, utts in tqdm(lzip(utt_masks, list(text))):
-                num_utts = int(np.sum(utt_mask))
-                utts = utts[:num_utts]
-                text_preprocessed = bert_preprocess_model(utts)
-                encoded = bert_model(text_preprocessed)['sequence_output'].numpy()
+    if 'audio' in args['modality']:
+        audio = tensors['audio']
 
-                num_words = np.sum(text_preprocessed['input_mask'], axis=-1)
-                for i,num_word in enumerate(num_words):
-                    encoded[i, num_word:, :] = 0
+    if 'text' in args['modality'] and 'audio' not in args['modality']:
+        train = text[train_idxs], labels[train_idxs], ids[train_idxs]
+        val = text[val_idxs], labels[val_idxs], ids[val_idxs]
+        test = text[test_idxs], labels[test_idxs], ids[test_idxs]
 
-                encoded = np.pad(encoded, ((0, max_utts-num_utts), (0,0), (0,0)), 'constant')
-                new_data.append(encoded)
-            text = ar(new_data)
-
-        labels = ar(labels).astype('int32')
-        utt_masks = ar(utt_masks)
-
-        if args['mode'] == 'inference':
-            train_utt_masks, train_labels = ar([]), ar([])
-            val_utt_masks, val_labels = ar([]), ar([])
-        else:
-            train_labels = labels[train_idxs]
-            train_utt_masks = utt_masks[train_idxs]
-            train_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(train_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(train_labels, np.sum(train_utt_masks, axis=-1).astype('int32'))]))
-            train_class_sample_weights = lvmap(lambda elt: train_class_weights[elt], train_labels)
-            train_utt_masks = train_class_sample_weights * train_utt_masks
-
-            val_labels = labels[val_idxs]
-            val_utt_masks = utt_masks[val_idxs]
-            val_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(val_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(val_labels, np.sum(val_utt_masks, axis=-1).astype('int32'))]))
-            val_class_sample_weights = lvmap(lambda elt: val_class_weights[elt], val_labels)
-            val_utt_masks = val_class_sample_weights * val_utt_masks
-
-        test_labels = labels[test_idxs]
-        test_utt_masks = utt_masks[test_idxs]
-        if args['mode'] != 'inference':
-            test_class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(test_labels).astype('int32'), y=np.concatenate([arr[:amt] for arr,amt in zip(test_labels, np.sum(test_utt_masks, axis=-1).astype('int32'))]))
-            test_class_sample_weights = lvmap(lambda elt: test_class_weights[elt], test_labels)
-            test_utt_masks = test_class_sample_weights * test_utt_masks
-        
-        if 'audio' in args['modality'] and 'text' in args['modality']:
-            train = ar(text)[train_idxs], ar(audio)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
-            val = ar(text)[val_idxs], ar(audio)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
-            test = ar(text)[test_idxs], ar(audio)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
-
-        elif 'audio' in args['modality']:
-            train = ar(audio)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
-            val = ar(audio)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
-            test = ar(audio)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
-
-        elif 'text' in args['modality']:
-            train = ar(text)[train_idxs], train_labels, train_utt_masks, unique_vid_keys[train_idxs]
-            val = ar(text)[val_idxs], val_labels, val_utt_masks, unique_vid_keys[val_idxs]
-            test = ar(text)[test_idxs], test_labels, test_utt_masks, unique_vid_keys[test_idxs]
-
-    else: # within utterance
-        labels = label_map_fn(np.squeeze(tensors['labels'])) if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])
-        ids = np.squeeze(tensors['ids'])
-
-        if args['mode'] == 'inference':
-            args['test_keys'] = np.squeeze(tensors['ids'])
-            args['train_keys'] = ar([])
-
-        if args['train_keys'] is None:
-            args['train_keys'], args['test_keys'] = train_test_split(np.squeeze(tensors['ids']), test_size=.2, random_state=11)
-            
-        train_idxs = np.where(arlmap(lambda elt: elt in args['train_keys'], np.squeeze(tensors['ids'])))[0]
-        if args['mode'] == 'inference':
-            train_idxs, val_idxs = ar([]).astype('int32'), ar([]).astype('int32')
-        else:
-            train_idxs, val_idxs = train_test_split(train_idxs, test_size=.2, random_state=11)
-
-        test_idxs = np.where(arlmap(lambda elt: elt in args['test_keys'], np.squeeze(tensors['ids'])))[0]
-        assert len(train_idxs) + len(val_idxs) + len(test_idxs) == len(tensors['ids']), 'If this assertion fails, it means not all utterance keys were accounted for in the keys provided'
+    elif 'audio' in args['modality'] and 'text' not in args['modality']:
+        train = audio[train_idxs], labels[train_idxs], ids[train_idxs]
+        val = audio[val_idxs], labels[val_idxs], ids[val_idxs]
+        test = audio[test_idxs], labels[test_idxs], ids[test_idxs]
     
-        if 'text' in args['modality']:
-            text = np.apply_along_axis(lambda row: b' '.join(row) if 'S' in str(row.dtype) else b' '.join(lmap(lambda elt: elt.encode('ascii'), row)), -1, np.squeeze(tensors['text']))
-            v = np.vectorize(lambda elt: elt[:(elt.find(b'0.0')-1)])
-            text = v(text)
-
-            print('Loading bert model and converting words to embeddings...')
-            bert_preprocess_model = hub.KerasLayer(tfhub_handle_preprocess)
-            bert_model = hub.KerasLayer(tfhub_handle_encoder)
-            
-            encodings = []
-            for sentence in tqdm(text):
-                preprocessed = bert_preprocess_model([sentence])
-                num_words = np.squeeze(np.sum(preprocessed['input_mask'], axis=-1))
-
-                encoded = np.squeeze(bert_model(preprocessed)['sequence_output'].numpy())
-                encoded[num_words:] = 0
-
-                # encoded = bert_model(preprocessed)['pooled_output'].numpy()
-                encodings.append(encoded)
-            text = np.squeeze(arlist(encodings))
-
-        if 'audio' in args['modality']:
-            audio = tensors['audio']
-
-        if 'text' in args['modality'] and 'audio' not in args['modality']:
-            train = text[train_idxs], labels[train_idxs], ids[train_idxs]
-            val = text[val_idxs], labels[val_idxs], ids[val_idxs]
-            test = text[test_idxs], labels[test_idxs], ids[test_idxs]
-
-        elif 'audio' in args['modality'] and 'text' not in args['modality']:
-            train = audio[train_idxs], labels[train_idxs], ids[train_idxs]
-            val = audio[val_idxs], labels[val_idxs], ids[val_idxs]
-            test = audio[test_idxs], labels[test_idxs], ids[test_idxs]
-        
-        else: # both
-            train = text[train_idxs], audio[train_idxs], labels[train_idxs], ids[train_idxs]
-            val = text[val_idxs], audio[val_idxs], labels[val_idxs], ids[val_idxs]
-            test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
-        
-        if args['mode'] != 'inference':
-            args['train_sample_weight'] = get_sample_weight(labels[train_idxs])
-            args['val_sample_weight'] = get_sample_weight(labels[val_idxs])
-            args['test_sample_weight'] = get_sample_weight(labels[test_idxs])
+    else: # both
+        train = text[train_idxs], audio[train_idxs], labels[train_idxs], ids[train_idxs]
+        val = text[val_idxs], audio[val_idxs], labels[val_idxs], ids[val_idxs]
+        test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
+    
+    if args['mode'] != 'inference':
+        args['train_sample_weight'] = get_sample_weight(labels[train_idxs])
+        args['val_sample_weight'] = get_sample_weight(labels[val_idxs])
+        args['test_sample_weight'] = get_sample_weight(labels[test_idxs])
 
     if args['mode'] != 'inference':
         print(f'Saving tensors to {args["tensors_path"]}.pk')
@@ -622,528 +495,73 @@ def load_data():
     return train, val, test
 ######### End data processing
 
-######### Models #########
-# We built support for different kinds of models - ones that considered within utterance or cross utterance context unimodally (audio xor text) and multimodally (audio + text)
-
-def train_cross_multi(train, val, test):
-    train_text, train_audio, train_labels, train_utt_masks, train_ids = train
-    val_text, val_audio, val_labels, val_utt_masks, val_ids = val
-    test_text, test_audio, test_labels, test_utt_masks, test_ids = test
-
-    train_cross_uni_audio(
-        train=(train_audio, train_labels, train_utt_masks, train_ids),
-        val=(val_audio, val_labels, val_utt_masks, val_ids),
-        test=(test_audio, test_labels, test_utt_masks, train_ids)
-    )
-    train_cross_uni_text(
-        train=(train_text, train_labels, train_utt_masks, train_ids), 
-        val=(val_text, val_labels, val_utt_masks, val_ids), 
-        test=(test_text, test_labels, test_utt_masks, train_ids)
-    )
-
-    import hffn
-    u = load_pk(args['uni_path'])
-    return hffn.multimodal(u, args)
-
-
-def train_within_multi(train, val, test):
-    train_text, train_audio, train_labels, train_ids = train
-    val_text, val_audio, val_labels, val_ids = val
-    test_text, test_audio, test_labels, test_ids = test
-
-    dropout=args['drop_within_multi']
-    TD = TimeDistributed
-
-    text_input = Input(shape=train_text.shape[1:], name='text')
-    text_mask = Masking(mask_value =0)(text_input)
-    text_lstm = Bidirectional(LSTM(32, activation='tanh', return_sequences=False, dropout=0.3))(text_mask)
-    text_drop = Dropout(dropout)(text_lstm)
-    text_inter = Dense(100, activation='tanh')(text_drop)
-    text_drop2 = Dropout(dropout)(text_inter)
-
-    audio_input = Input(shape=train_audio.shape[1:], name='audio')
-    audio_conv = Conv1D(filters=50, kernel_size=3, padding='same', data_format='channels_last', dtype='float32')(audio_input)
-    audio_drop = Dropout(dropout)(audio_conv)
-    audio_conv2 = Conv1D(filters=50, kernel_size=4, padding='same', data_format='channels_last', dtype='float32')(audio_drop)
-    audio_drop2 = Dropout(dropout)(audio_conv2)
-    audio_mp = MaxPool1D(pool_size=4, data_format='channels_last')(audio_drop2)
-    audio_conv3 = Conv1D(filters=50, kernel_size=2, padding='same', data_format='channels_last', dtype='float32')(audio_mp)
-    audio_drop3 = Dropout(dropout)(audio_conv3)
-    audio_gmp = GlobalMaxPooling1D()(audio_drop3)
-
-    concat = tf.keras.layers.concatenate([audio_gmp, text_drop2], axis=-1)
-
-    dense1 = Dense(100, activation='relu')(concat)
-    drop2 = Dropout(dropout)(dense1)
-    clf = Dense(num_labels, activation='softmax')(drop2)
-
-    model = Model({'text': text_input, 'audio': audio_input}, clf)
-    
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=args['multi_lr']),
-        loss='sparse_categorical_crossentropy',
-        weighted_metrics=['sparse_categorical_accuracy'],
-    )
-    model.summary()
-    train_history = model.fit(
-        x={'text': train_text, 'audio': train_audio},
-        y=train_labels,
-        batch_size=10,
-        sample_weight=args['train_sample_weight'],
-        epochs=500,
-        validation_data=({'text': val_text, 'audio': val_audio}, val_labels, args['val_sample_weight']),
-        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
-        verbose=1,
-    ).history
-    eval_history = model.evaluate(
-        x={'text': test_text, 'audio': test_audio},
-        y=test_labels,
-        sample_weight=args['test_sample_weight'],
-        batch_size=10,
-    )
-    mkdirp(args['model_path'])
-    print('Saving model...')
-    model.save(args['model_path'], include_optimizer=False)
-
-    res = {
-        'train_losses': ar(train_history['loss']),
-        'train_accs': ar(train_history['sparse_categorical_accuracy']),
-        'val_losses': ar(train_history['val_loss']),
-        'val_accs': ar(train_history['val_sparse_categorical_accuracy']),
-        'test_acc': eval_history[1],
-        'test_loss': eval_history[0],
-    }
-    return res
-
-
-def train_cross_uni_audio(train, val, test):
-    train_data, train_labels, train_utt_masks, train_ids = train
-    val_data, val_labels, val_utt_masks, val_ids = val
-    test_data, test_labels, test_utt_masks, test_ids = test
-
-    input = Input(shape=(train_data.shape[1],train_data.shape[2],train_data.shape[3]))
-    conv = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=16, padding='same', data_format='channels_last', dtype='float32'))(input)
-    drop = TimeDistributed(Dropout(args['drop_audio']))(conv)
-    conv2 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=16, padding='same', data_format='channels_last', dtype='float32'))(drop)
-    drop2 = TimeDistributed(Dropout(args['drop_audio']))(conv2)
-    mp = TimeDistributed(MaxPool1D(pool_size=4, data_format='channels_last'))(drop2)
-    conv3 = TimeDistributed(Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=8, padding='same', data_format='channels_last', dtype='float32'))(mp)
-    drop3 = TimeDistributed(Dropout(args['drop_audio']))(conv3)
-    gmp = TimeDistributed(GlobalMaxPooling1D())(drop3)
-
-    gru = Bidirectional(GRU(32, activation='tanh', return_sequences=True, dropout=args['drop_audio_lstm']))(gmp)
-    drop4 = TimeDistributed(Dropout(args['drop_audio']))(gru)
-    dense1 = TimeDistributed(Dense(100, activation='relu'))(drop4)
-    drop5 = TimeDistributed(Dropout(args['drop_audio']))(dense1)
-    dense2 = TimeDistributed(Dense(num_labels, activation='softmax'))(drop5)
-
-    model = Model(input, dense2)
-    aux = Model(input, dense1)
-
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=args['audio_lr']),
-        loss='sparse_categorical_crossentropy',
-        weighted_metrics=['sparse_categorical_accuracy'],
-        sample_weight_mode='temporal',
-    )
-    model.summary()
-    train_history = model.fit(
-        x=train_data,
-        y=train_labels,
-        sample_weight=train_utt_masks,
-        batch_size=args['bs'],
-        epochs=args['epochs'],
-        validation_data=(val_data, val_labels, val_utt_masks),
-        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
-    ).history
-    eval_history = model.evaluate(
-        x=test_data,
-        y=test_labels,
-        sample_weight=test_utt_masks,
-        batch_size=args['bs'],
-    )
-    print('Saving model...')
-    if len(args['modality'].split(','))>1: # multimodal
-        hffn_save_path = join(args['hffn_path'], 'uni_audio')
-        mkdirp(hffn_save_path)
-        aux.save(hffn_save_path, include_optimizer=False)
-
-    else:
-        mkdirp(args['model_path'])
-        model.save(args['model_path'], include_optimizer=False)
-        
-    uni = load_pk(args['uni_path'])
-    uni = {} if uni is None else uni
-    uni['audio_train'] = aux.predict(x=train_data, batch_size=10)
-    uni['audio_train_mask'] = train_utt_masks
-    uni['audio_train_label'] = train_labels
-
-    uni['audio_val'] = aux.predict(x=val_data, batch_size=10)
-    uni['audio_val_mask'] = val_utt_masks
-    uni['audio_val_label'] = val_labels
-
-    uni['audio_test'] = aux.predict(x=test_data, batch_size=10)
-    uni['audio_test_mask'] = test_utt_masks
-    uni['audio_test_label'] = test_labels
-    save_pk(args['uni_path'], uni)
-
-    res = {
-        'train_losses': ar(train_history['loss']),
-        'train_accs': ar(train_history['sparse_categorical_accuracy']),
-        'val_losses': ar(train_history['val_loss']),
-        'val_accs': ar(train_history['val_sparse_categorical_accuracy']),
-        'test_acc': eval_history[1],
-        'test_loss': eval_history[0],
-    }
-    return res
-
-def train_within_uni_audio(train, val, test):
-    train_data, train_labels, train_ids = train
-    val_data, val_labels, val_ids = val
-    test_data, test_labels, test_ids = test
-
-    input = Input(shape=(train_data.shape[1],train_data.shape[2]))
-    conv = Conv1D(filters=args['filters_audio'], dilation_rate=1, kernel_size=3, padding='same', data_format='channels_last', dtype='float32')(input)
-    drop = Dropout(args['drop_audio'])(conv)
-    conv2 = Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=4, padding='same', data_format='channels_last', dtype='float32')(drop)
-    drop2 = Dropout(args['drop_audio'])(conv2)
-    mp = MaxPool1D(pool_size=4, data_format='channels_last')(drop2)
-    conv3 = Conv1D(filters=args['filters_audio'], dilation_rate=2, kernel_size=2, padding='same', data_format='channels_last', dtype='float32')(mp)
-    drop3 = Dropout(args['drop_audio'])(conv3)
-    gmp = GlobalMaxPooling1D()(drop3)
-    drop4 = Dropout(args['drop_audio'])(gmp)
-    dense1 = Dense(100, activation='relu')(drop4)
-    drop5 = Dropout(args['drop_audio'])(dense1)
-    dense2 = Dense(num_labels, activation='softmax')(drop5)
-
-    model = Model(input, dense2)
-    aux = Model(input, dense1)
-
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=args['audio_lr']),
-        loss='sparse_categorical_crossentropy',
-        weighted_metrics=['sparse_categorical_accuracy'],
-    )
-    model.summary()
-    train_history = model.fit(
-        x=train_data,
-        y=train_labels,
-        batch_size=args['bs'],
-        sample_weight=args['train_sample_weight'],
-        epochs=args['epochs'],
-        validation_data=(val_data, val_labels),
-        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
-    ).history
-    eval_history = model.evaluate(
-        x=test_data,
-        y=test_labels,
-        batch_size=args['bs'],
-        sample_weight=args['test_sample_weight'],
-    )
-    mkdirp(args['model_path'])
-    print('Saving model...')
-    model.save(args['model_path'], include_optimizer=False)
-
-    res = {
-        'train_losses': ar(train_history['loss']),
-        'train_accs': ar(train_history['sparse_categorical_accuracy']),
-        'val_losses': ar(train_history['val_loss']),
-        'val_accs': ar(train_history['val_sparse_categorical_accuracy']),
-        'test_acc': eval_history[1],
-        'test_loss': eval_history[0],
-    }
-    return res
-
-
-def train_cross_uni_text(train, val, test):
-    train_data, train_labels, train_utt_masks, train_ids = train
-    val_data, val_labels, val_utt_masks, val_ids = val
-    test_data, test_labels, test_utt_masks, test_ids = test
-
-    def res_block(x, filters):
-        x_skip = x
-
-        x = TimeDistributed(Conv1D(filters=filters, kernel_size=4, dilation_rate=1, padding='same', data_format='channels_last', dtype='float32'))(x)
-        x = TimeDistributed(BatchNormalization())(x)
-        x = TimeDistributed(Activation(tf.keras.activations.relu))(x)
-
-        x = TimeDistributed(Conv1D(filters=filters, kernel_size=8, dilation_rate=2, padding='same', data_format='channels_last', dtype='float32'))(x)
-        x = TimeDistributed(BatchNormalization())(x)
-        x = TimeDistributed(Activation(tf.keras.activations.relu))(x)
-
-        x = TimeDistributed(Conv1D(filters=filters, kernel_size=8, dilation_rate=2, padding='same', data_format='channels_last', dtype='float32'))(x)
-        x = TimeDistributed(BatchNormalization())(x)
-        
-        x = Add()([x, x_skip])
-
-        x = TimeDistributed(Activation(tf.keras.activations.relu))(x)
-        return x
-
-    res = { 'train_losses': [], 'train_accs': [], 'val_losses': [], 'val_accs': [], 'test_loss': [], 'test_accs': [] }
-
-    input = Input(shape=(train_data.shape[1],train_data.shape[2],train_data.shape[3]))
-    conv = TimeDistributed(Conv1D(filters=args['filters_text'], kernel_size=4, dilation_rate=1, padding='same', data_format='channels_last', dtype='float32'))(input)
-    drop = TimeDistributed(Dropout(args['drop_text']))(conv)
-    mp = TimeDistributed(MaxPool1D(pool_size=4, data_format='channels_last'))(drop)
-
-    res = res_block(mp, filters=args['filters_text'])
-    gmp = TimeDistributed(GlobalMaxPooling1D())(res)
-
-    lstm = Bidirectional(LSTM(args['lstm_units_text'], activation='tanh', return_sequences=True, dropout=args['drop_text_lstm']))(gmp)
-    drop = Dropout(args['drop_text'])(lstm)
-    inter = TimeDistributed(Dense(100, activation='tanh'))(drop)
-    drop2 = Dropout(args['drop_text'])(inter)
-    clf = TimeDistributed(Dense(num_labels, activation='softmax'))(drop2)
-
-    model = Model(input, clf)
-    aux = Model(input, inter)
-    
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=args['text_lr']),
-        loss='sparse_categorical_crossentropy',
-        weighted_metrics=['sparse_categorical_accuracy'],
-        sample_weight_mode='temporal',
-    )
-    model.summary()
-    train_history = model.fit(
-        x=train_data,
-        y=train_labels,
-        sample_weight=train_utt_masks,
-        batch_size=args['bs'],
-        epochs=args['epochs'],
-        validation_data=(val_data, val_labels, val_utt_masks),
-        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
-    ).history
-    eval_history = model.evaluate(
-        x=test_data,
-        y=test_labels,
-        sample_weight=test_utt_masks,
-        batch_size=args['bs'],
-    )
-    print('Saving model...')
-    if len(args['modality'].split(','))>1: # multimodal
-        hffn_save_path = join(args['hffn_path'], 'uni_text')
-        mkdirp(hffn_save_path)
-        aux.save(hffn_save_path, include_optimizer=False)
-
-    else:
-        mkdirp(args['model_path'])
-        model.save(args['model_path'], include_optimizer=False)
-
-    uni = load_pk(args['uni_path'])
-    uni = {} if uni is None else uni
-    uni['text_train'] = aux.predict(x=train_data, batch_size=10)
-    uni['text_train_mask'] = train_utt_masks
-    uni['text_train_label'] = train_labels
-
-    uni['text_val'] = aux.predict(x=val_data, batch_size=10)
-    uni['text_val_mask'] = val_utt_masks
-    uni['text_val_label'] = val_labels
-
-    uni['text_test'] = aux.predict(x=test_data, batch_size=10)
-    uni['text_test_mask'] = test_utt_masks
-    uni['text_test_label'] = test_labels
-    save_pk(args['uni_path'], uni)
-
-    res = {
-        'train_losses': ar(train_history['loss']),
-        'train_accs': ar(train_history['sparse_categorical_accuracy']),
-        'val_losses': ar(train_history['val_loss']),
-        'val_accs': ar(train_history['val_sparse_categorical_accuracy']),
-        'test_acc': eval_history[1],
-        'test_loss': eval_history[0],
-    }
-    return res
-
-
-def get_sample_weight(labels,class_weights=None):
-    labels = labels.astype('int32')
-    if class_weights is None:
-        class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(labels).astype('int32'), y=labels)
-    sample_weight = lvmap(lambda elt: class_weights[elt], labels)
-    return sample_weight
-
-def train_within_uni_text(train, val, test):
-    train_data, train_labels, train_ids = train
-    val_data, val_labels, val_ids = val
-    test_data, test_labels, test_ids = test
-
-    res = { 'train_losses': [], 'train_accs': [], 'val_losses': [], 'val_accs': [], 'test_loss': [], 'test_accs': [] }
-
-    input = Input(shape=(train_data.shape[1], train_data.shape[2]))
-    lstm = Bidirectional(LSTM(args['lstm_units_text'], activation='tanh', return_sequences=False, dropout=args['drop_text_lstm']))(input)
-    drop = Dropout(args['drop_text'])(lstm)
-    inter = Dense(100, activation='tanh')(drop)
-    drop2 = Dropout(args['drop_text'])(inter)
-    clf = Dense(num_labels, activation='softmax')(drop2)
-
-    model = Model(input, clf)
-    aux = Model(input, inter)
-    
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr=args['text_lr']),
-        loss='sparse_categorical_crossentropy',
-        weighted_metrics=['sparse_categorical_accuracy'],
-    )
-    model.summary()
-    train_history = model.fit(
-        x=train_data,
-        y=train_labels,
-        sample_weight=args['train_sample_weight'],
-        batch_size=args['bs'],
-        epochs=args['epochs'],
-        validation_data=(val_data, val_labels, args['val_sample_weight']),
-        callbacks=[EarlyStopping(monitor='val_loss', mode='min', patience=15, restore_best_weights=True)],
-    ).history
-
-    eval_history = model.evaluate(
-        x=test_data,
-        y=test_labels,
-        sample_weight=args['test_sample_weight'],
-        batch_size=args['bs'],
-    )
-    mkdirp(args['model_path'])
-    print('Saving model...')
-    model.save(args['model_path'], include_optimizer=False)
-    res = {
-        'train_losses': ar(train_history['loss']),
-        'train_accs': ar(train_history['sparse_categorical_accuracy']),
-        'val_losses': ar(train_history['val_loss']),
-        'val_accs': ar(train_history['val_sparse_categorical_accuracy']),
-        'test_acc': eval_history[1],
-        'test_loss': eval_history[0],
-    }
-    return res
-
-######### End models #########
 
 def main(args_in):
     global args
     args = args_in
 
-    train, val, test = load_data()
-    if args['cross_utterance']:
-        if 'text' in args['modality'] and 'audio' in args['modality']:
-            return train_cross_multi(train,val,test)
+    assert args['cross_utterance']==0, 'Cross utterance training / inference is no longer supported.  Please see cross_utterance_appendix.py if you\'d like to implement this.'
 
-        elif 'text' in args['modality']:
-            return train_cross_uni_text(train,val,test)
-
-        elif 'audio' in args['modality']:
-            return train_cross_uni_audio(train,val,test)
-    
-    else: # within
-        if 'text' in args['modality'] and 'audio' in args['modality']:
-            return train_within_multi(train,val,test)
-        elif 'text' in args['modality']:
-            return train_within_uni_text(train,val,test)
-        elif 'audio' in args['modality']:
-            return train_within_uni_audio(train,val,test)
+    train, val, test = load_data()    
+    if 'text' in args['modality'] and 'audio' in args['modality']:
+        return train_within_multi(train,val,test)
+    elif 'text' in args['modality']:
+        return train_within_uni_text(train,val,test)
+    elif 'audio' in args['modality']:
+        return train_within_uni_audio(train,val,test)
 
 def main_inference(args_in):
     global args
     args = args_in
 
+    assert args['cross_utterance']==0, 'Cross utterance training / inference is no longer supported.  Please see cross_utterance_appendix.py if you\'d like to implement this.'
+
     _,_, test = load_data()
 
     print('Predicting...')
-    if not args['cross_utterance']: # within
-        model = tf.keras.models.load_model(args['model_path'])
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
-            loss='sparse_categorical_crossentropy',
-            weighted_metrics=['sparse_categorical_accuracy'],
-        )
+    model = tf.keras.models.load_model(args['model_path'])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
+        loss='sparse_categorical_crossentropy',
+        weighted_metrics=['sparse_categorical_accuracy'],
+    )
 
-        # max_utts = model._build_input_shape[1] #56 for iemocap
-        if len(args['modality'].split(','))>1: # multimodal
-            test_text, test_audio, test_labels, ids = test
-            if args['evaluate_inference']:
-                model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
-            preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
-
-        else:
-            test_data, test_labels, ids = test
-            if args['evaluate_inference']:
-                model.evaluate(test_data, test_labels, batch_size=args['bs'])
-            preds = model.predict(test_data)
+    # max_utts = model._build_input_shape[1] #56 for iemocap
+    if len(args['modality'].split(','))>1: # multimodal
+        test_text, test_audio, test_labels, ids = test
+        if args['evaluate_inference']:
+            model.evaluate({'text': test_text, 'audio': test_audio}, test_labels, batch_size=args['bs'])
+        preds = model.predict({'text': test_text, 'audio': test_audio}, batch_size=args['bs'])
 
     else:
-        if len(args['modality'].split(','))>1: # multimodal
-            test_text, test_audio, test_labels, test_utt_masks, ids = test
+        test_data, test_labels, ids = test
+        if args['evaluate_inference']:
+            model.evaluate(test_data, test_labels, batch_size=args['bs'])
+        preds = model.predict(test_data)
 
-            print('Loading models for HFFN inference...')
-            uni_text_model = tf.keras.models.load_model(join(args['hffn_path'], 'uni_text'))
-            uni_audio_model = tf.keras.models.load_model(join(args['hffn_path'], 'uni_audio'))
-            
-            uni = {
-                'text': uni_text_model.predict(x=test_text, batch_size=10),
-                'audio': uni_audio_model.predict(x=test_audio, batch_size=10),
-                'mask': test_utt_masks,
-                'label': test_labels
-            }
-
-            import hffn
-            preds = hffn.inference(uni, args)
-            
-        else:
-            test_data, test_labels, test_utt_masks, ids = test
-            model = tf.keras.models.load_model(args['model_path'])
-            model.compile(
-                optimizer=tf.keras.optimizers.Adam(learning_rate=args['text_lr']),
-                loss='sparse_categorical_crossentropy',
-                weighted_metrics=['sparse_categorical_accuracy'],
-                sample_weight_mode='temporal',
-            )
-            max_utts = model._build_input_shape[1] #56 for iemocap
-            
-            if args['evaluate_inference']:
-                model.evaluate(test_data, test_labels, batch_size=args['bs'], sample_weight=test_utt_masks)
-            preds = model.predict(test_data)
-    
     if args['print_transcripts']:
         a = {k: ' '.join(v['features'].reshape(-1)) for k,v in load_pk(args['transcripts_path']).items()}
         reverse_label_map = [0,1,2]
-        if args['cross_utterance']:
-            utt_masks = np.sum(test_utt_masks, axis=-1).astype('int32')
-            vid_ids = np.concatenate([ [vid_id]*num_utts for vid_id,num_utts in zip(ids, utt_masks)])
-            vid_ids
-
-            utt_ids = np.concatenate([ np.arange(num_utts) for num_utts in utt_masks ])
-            utt_ids
-
-            y_pred = np.argmax(preds, axis=-1)
-            y_preds = np.concatenate([ y_pred[i,:num_utts] for i,num_utts in zip(np.arange(utt_masks.shape[0]), utt_masks)])
-
-            y_true = np.concatenate([ test_labels[i,:num_utts] for i,num_utts in zip(np.arange(utt_masks.shape[0]), utt_masks)])
-            y_true.shape
-
-            df = pd.DataFrame({'vid_ids': vid_ids, 'utt_ids': utt_ids, 'pred': y_preds, 'label': y_true, 'correct': y_preds==y_true})
-            tensors = load_pk('./.temp_tensors.pk')
-            df['text'] = df.apply(lambda elt: ' '.join(tensors['text'][np.where(tensors['ids'].reshape(-1)==f"{elt['vid_ids']}[{elt['utt_ids']}]")[0][0]].reshape(-1)).replace(' 0.0', ''), axis=1)
-            df = df[['vid_ids', 'utt_ids', 'text', 'correct', 'pred', 'label']]
             
-        else:
-            d = {}
-            corrects = test_labels==np.argmax(preds, axis=-1)
-            for id,corr in zip(ids,corrects):
-                k = id.split('[')[0]
-                if k not in d:
-                    d[k] = [corr]
-                else:
-                    d[k].append(corr)
+        d = {}
+        corrects = test_labels==np.argmax(preds, axis=-1)
+        for id,corr in zip(ids,corrects):
+            k = id.split('[')[0]
+            if k not in d:
+                d[k] = [corr]
+            else:
+                d[k].append(corr)
 
-            for k,v in d.items():
-                d[k] = np.sum(v)/len(v)
+        for k,v in d.items():
+            d[k] = np.sum(v)/len(v)
 
-            df = pd.DataFrame({'id': ids, 'pred': np.argmax(preds, axis=-1), 'label': test_labels, 'correct': (np.argmax(preds, axis=-1)==test_labels).astype('int32')})
-            print(df)
-            save_pk('df.pk', df)
+        df = pd.DataFrame({'id': ids, 'pred': np.argmax(preds, axis=-1), 'label': test_labels, 'correct': (np.argmax(preds, axis=-1)==test_labels).astype('int32')})
+        print(df)
+        save_pk('preds/df.pk', df)
 
     print('Your output will be in output/inference.pk')
     full_res = {
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
-        'utt_masks': None if not args['cross_utterance'] else test_utt_masks,
         'predictions': preds,
         'ids': ids,
         'speaker_ver': args['speaker_ver']
@@ -1180,6 +598,7 @@ params = [
     ('--keys_path',str, '', '(Optional) path to json file with keys "train_keys" and "test_keys" which each contain nonoverlapping video (if cross-utterance) / utterance (if within) key lists'),
     ('--print_transcripts',int, 0, 'Print transcripts and labels during inference. NOTE: change keys if not IEMOCAP.'),
     ('--VAD_agg',int, 0, 'Aggressiveness of VAD during inference'),
+    ('--num_labels',int, 3, 'Dimensionality of labels'),
 
     # hyperparameters
     ('--epochs', int, 500, ''),
@@ -1213,7 +632,8 @@ if __name__ == '__main__':
         parser.register_parameter(*param)
 
     args = vars(parser.compile_argparse())
-    args['num_labels'] = num_labels
+
+    builtins.args = args # make args a cross-module global variable.  Not particularly good practice, but cuts down development time dramatically when adding hyperparams for a search
 
     assert args['mode'] in ['train', 'inference']
     keys = load_json(args['keys_path'])
@@ -1232,8 +652,6 @@ if __name__ == '__main__':
 
     out_dir = 'output/'
     mkdirp(out_dir)
-    # init_except_hook()
-    # init_exit_hook()
 
     if args['mode'] == 'train':
         full_res = {} 
