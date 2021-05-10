@@ -1,5 +1,5 @@
 # Multimodal Fusion
-This package offers unimodal and multimodal approaches to within-utterance and cross-utterance classification problems.
+This package offers unimodal and multimodal approaches to within-utterance and cross-utterance classification problems. In essence, this module takes in a transcripts file and a path to a directory containing wavs, generates MFB's from those wavs, aligns the MFB's with the transcripts, extracts word embeddings using BERT, packages everything together in a single `tensors` object (which is saved to disk in `--tensors_path`), then trains and tests on this object according to some parameters you pass in.  In this README, I first describe the requirements, then the data format for how to add new datasets, and the parameters required to run the program.
 
 ## Requirements
 1. `conda` is installed
@@ -39,199 +39,85 @@ Create and save a file called `azure_secrets.json`, with the following code insi
 }
 ```
 
-### Unimodal Lexical Classifier
-Let's start off by getting a simple **unimodal lexical classifier** working on the IEMOCAP dataset.
 
-```
-python3 main.py --modality text --tensors_path tensors/tensors.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
-```
 
-You'll notice that a lot of the time was spent loading and aligning the dataset.  If you rerun the command, you'll see that we skip this step because we've cached our tensors in tensors_path.  If you don't want this to happen, use `--overwrite_tensors 1`.  If you're running a bunch of tests that involve data preprocessing and don't want to have to worry about renaming tensors each time (or having them overlap across tests), set `--tensors_path unique` and the program will choose a random hash as the tensors name.  This will be useful for us later on.
+### Training Data Format
+The three main inputs to our training pipeline are the transcripts, the wav directory, and the labels.
 
-Running the program this way doesn't give you control over which portion of the dataset you train vs test on.  To change that, simply pass in the path to a json file containing an object of the form:
-```
+#### Transcripts
+The transcripts must be a dictionary, saved in `--transcripts_path` as a pickle file and formatted as such:
+```python
 {
-    'train_keys': [list of train keys],
-    'test_keys': [list of test keys],
+    'wav_id': {
+        'features': [['word1'], ['word2']..., ['wordn']], # np array of shape (n,1) for n words, stored in utf8 encoding (standard strings) or binary encoding
+        'intervals': [ [0,1.2], [1.2, 2.3]...], # np array of shape (n,2) of floats describing the start and end time of each word in seconds from the start of the wav file
+    }
 }
 ```
 
-For example on IEMOCAP:
-```
-python3 main.py --modality text --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/utt_keys.json
-```
-
-### Unimodal Audio Classifier
-Before we get started with our classifier, we'll download the data.
-```
-cd data/iemocap
-gdown https://drive.google.com/uc?id=1eGj8DSau66NiklH30UIGab55cUWR_qw9
-tar -xvf ie_wavs.tar
-cd ../..
-```
-
-Now we can run our unimodal acoustic classifier. 
-```
-python3 main.py --modality audio --tensors_path unique --audio_path data/iemocap/mfb.pk --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --trials 1
-```
-
-First, you'll see that we map our wav files to mfbs.  Then, we align the dataset with the labels and begin classification.  We cache mfbs, but if you'd like to overwrite them, just set `--overwrite_mfbs 1`.
-
-### Cross Utterance Classification
-So far, we've classified each utterance independently from neighboring utterances.  However, utterances take place within the context of a larger conversation.  We'll leverage that here with a **cross utterance unimodal lexical classifier**.
-
-```
-python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1
-```
-
-We can specify train/test keys the same way, but it is important to note that **the keys must now be video ids instead of utterance ids**. See `data/iemocap/vid_keys.json` vs `data/iemocap/utt_keys.json` for an example of the difference. A note on terminology: we use the term "video" to describe a temporally ordered grouping of utterances - the visual modality does not need to be present.
-```
-python3 main.py --modality text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --trials 1 --keys_path data/iemocap/vid_keys.json
-```
-
-### Multimodal Classification
-So far, we've only performed unimodal classification on audio xor text.  Now, we will combine them.
-
-To perform **within-utterance multimodal classification**, we'll modify `--modality` to contain `audio,text` (order doesn't matter) while keeping `--cross_utterance 0`.
-```
-python3 main.py --modality audio,text --cross_utterance 0 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
-```
-
-We can get significant performance improvements by using HFFN to implement **cross-utterance multimodal classification**.
-```
-python3 main.py --modality audio,text --cross_utterance 1 --tensors_path unique --labels_path data/iemocap/IEMOCAP_EmotionLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --trials 1
-```
-
-### Inference
-As you train your models, they are automatically saved to `BASE_PATH/models` (`BASE_PATH` from `consts.py`). You can specify this path with the `--model_path` flag (or, in the case of cross utterance multimodal training with HFFN, with the `--hffn_path` flag, which requires that unimodal and multimodal models be created). Once a model is saved, we can use it to generate predictions by feeding in data in the correct format.
-
-Let's first train a within utterance unimodal text model on IEMOCAP, saving it to `models/model`
-```
-python3 main.py --modality text --tensors_path unique --mode train --cross_utterance 0
-```
-
-Now, we will run inference on a wav file, `test2.wav`.  `--mode inference` will automatically split the wav into sub-wavs using a voice activity detector (you can modify the aggressiveness of the detector with `--VAD_agg` - see my [deepspeech repo](https://github.com/abwilf/deepspeech) for more details) and transcribe the wavs in `--wav_dir` if they do not yet exist in `--transcripts_path` using the azure cognitive services credentials `azure_secrets.json`. 
-```
-python3 main.py --modality text --mode inference --cross_utterance 0 --print_transcripts 1 --wav_dir demo_data/wavs --transcripts_path demo_data/transcripts.pk
-```
-
-The transcripts are available in the pickle file:
+For example, to see our transcripts for IEMOCAP, open up this file using `pickle`. I use helper functions `load_pk` and `save_pk` from `utils.py` to do this quickly.
 ```
 python3
 from utils import *
-load_pk('demo_data/transcripts.pk')
+tran = load_pk('data/iemocap/IEMOCAP_TimestampedWords.pk')
+k = lkeys(tran)[0]
+print(tran[k])
 ```
 
-You can run this with different `--modality` and `--cross_utterance` flags as well, provided you have previously trained a model equipped to handle the type of modality and within/cross utterance type and that model exists in `--model_path` (or `--hffn_path` if cross utterance multimodal).  Your results will be in `output/inference.pk`.
+#### Wavs
+The wavs must be in a directory specified by `--wav_dir` with their names given as `{wav_id}.wav`.  For example, our IEMOCAP wavs look like this (CHAI members: all paths are on `lotus`)
 
-A note about wavs you pass in: they must be 16khz mono 32 bit float to be compatible with the voice activity detector and azure speech-to-text.
+```
+ls /z/abwilf/iemocap_wavs/clean
 
-### Grid Searches
-Grid searching over hyperparameters can be essential to maximizing performance.  With Amir Zadeh's [Standard-Grid](https://github.com/A2Zadeh/Standard-Grid) this becomes easy.  We'll be using my fork of the project to access a few nice features.
+Ses01F_impro01.wav     Ses01M_impro04.wav     Ses02F_impro07.wav     Ses02M_script01_1.wav  Ses03F_script01_3.wav  Ses03M_script01_3.wav  Ses04F_script02_2.wav  Ses04M_script03_2.wav	Ses05M_impro02.wav
+Ses01F_impro02.wav     Ses01M_impro05.wav     Ses02F_impro08.wav     Ses02M_script01_2.wav  Ses03F_script02_1.wav  Ses03M_script02_1.wav  Ses04F_script03_1.wav  Ses05F_impro01.wav	Ses05M_impro03.wav
+Ses01F_impro03.wav     Ses01M_impro06.wav     Ses02F_script01_1.wav  Ses02M_script01_3.wav  Ses03F_script02_2.wav  Ses03M_script02_2.wav  Ses04F_script03_2.wav  Ses05F_impro02.wav	Ses05M_impro04.wav
+Ses01F_impro04.wav     Ses01M_impro07.wav     Ses02F_script01_2.wav  Ses02M_script02_1.wav  Ses03F_script03_1.wav  Ses03M_script03_1.wav  Ses04M_impro01.wav	 Ses05F_impro03.wav	Ses05M_impro05.wav
+Ses01F_impro05.wav     Ses01M_script01_1.wav  Ses02F_script01_3.wav  Ses02M_script02_2.wav  Ses03F_script03_2.wav  Ses03M_script03_2.wav  Ses04M_impro02.wav	 Ses05F_impro04.wav	Ses05M_impro06.wav
+Ses01F_impro06.wav     Ses01M_script01_2.wav  Ses02F_script02_1.wav  Ses02M_script03_1.wav  Ses03M_impro01.wav	   Ses04F_impro01.wav	  Ses04M_impro03.wav	 Ses05F_impro05.wav	Ses05M_impro07.wav
+Ses01F_impro07.wav     Ses01M_script01_3.wav  Ses02F_script02_2.wav  Ses02M_script03_2.wav  Ses03M_impro02.wav	   Ses04F_impro02.wav	  Ses04M_impro04.wav	 Ses05F_impro06.wav	Ses05M_impro08.wav
+Ses01F_script01_1.wav  Ses01M_script02_1.wav  Ses02F_script03_1.wav  Ses03F_impro01.wav     Ses03M_impro03.wav	   Ses04F_impro03.wav	  Ses04M_impro05.wav	 Ses05F_impro07.wav	Ses05M_script01_1.wav
+Ses01F_script01_2.wav  Ses01M_script02_2.wav  Ses02F_script03_2.wav  Ses03F_impro02.wav     Ses03M_impro04.wav	   Ses04F_impro04.wav	  Ses04M_impro06.wav	 Ses05F_impro08.wav	Ses05M_script01_2.wav
+Ses01F_script01_3.wav  Ses01M_script03_1.wav  Ses02M_impro01.wav     Ses03F_impro03.wav     Ses03M_impro05a.wav    Ses04F_impro05.wav	  Ses04M_impro07.wav	 Ses05F_script01_1.wav	Ses05M_script01_3.wav
+Ses01F_script02_1.wav  Ses01M_script03_2.wav  Ses02M_impro02.wav     Ses03F_impro04.wav     Ses03M_impro05b.wav    Ses04F_impro06.wav	  Ses04M_impro08.wav	 Ses05F_script01_2.wav	Ses05M_script02_1.wav
+Ses01F_script02_2.wav  Ses02F_impro01.wav     Ses02M_impro03.wav     Ses03F_impro05.wav     Ses03M_impro06.wav	   Ses04F_impro07.wav	  Ses04M_script01_1.wav  Ses05F_script01_3.wav	Ses05M_script02_2.wav
+Ses01F_script03_1.wav  Ses02F_impro02.wav     Ses02M_impro04.wav     Ses03F_impro06.wav     Ses03M_impro07.wav	   Ses04F_impro08.wav	  Ses04M_script01_2.wav  Ses05F_script02_1.wav	Ses05M_script03_1.wav
+Ses01F_script03_2.wav  Ses02F_impro03.wav     Ses02M_impro05.wav     Ses03F_impro07.wav     Ses03M_impro08a.wav    Ses04F_script01_1.wav  Ses04M_script01_3.wav  Ses05F_script02_2.wav	Ses05M_script03_2.wav
+Ses01M_impro01.wav     Ses02F_impro04.wav     Ses02M_impro06.wav     Ses03F_impro08.wav     Ses03M_impro08b.wav    Ses04F_script01_2.wav  Ses04M_script02_1.wav  Ses05F_script03_1.wav	temp
+Ses01M_impro02.wav     Ses02F_impro05.wav     Ses02M_impro07.wav     Ses03F_script01_1.wav  Ses03M_script01_1.wav  Ses04F_script01_3.wav  Ses04M_script02_2.wav  Ses05F_script03_2.wav
+Ses01M_impro03.wav     Ses02F_impro06.wav     Ses02M_impro08.wav     Ses03F_script01_2.wav  Ses03M_script01_2.wav  Ses04F_script02_1.wav  Ses04M_script03_1.wav  Ses05M_impro01.wav
 
-To demonstrate these capabilities, we'll grid search over different approaches and modalities. In `generate.py`, you'll see our grid:
+```
+
+#### Labels
+Labels must be stored similarly to transcripts, in a pickle file in `--labels_path` containing a python object of the form:
 ```python
-'cross_utterance': [0,1],
-'modality': ['text', 'audio', 'text,audio'],
-'tensors_path': ['unique'],
-```
-
-To get a search started, simply type `python3 generate.py`, then copy the resulting output into the shell.
-```bash
-hash='06819'
-p start_time.py $hash; root=$(pwd); attempt='0'; cd $root/results/${hash}/central/attempt_${attempt}/; chmod +x main.sh; ./main.sh; cd $root; p status.py ${hash}; p interpret.py ${hash};
-```
-
-When your test has finished, you can see your results in `results/{hash}/csv_results.csv`. Here's a short script to visualize the results of our grid search together.
-```
-python3 vis_results.py
-```
-
-```
-Results of grid search:
-      acc  cross_utterance    modality
-1  0.4873                0       audio
-4  0.5570                0        text
-3  0.6618                0  text,audio
-2  0.4566                1       audio
-0  0.6885                1        text
-```
-
-### Other Datasets
-To train / test models on **MOSEI**, first download the data
-```
-cd data
-gdown https://drive.google.com/uc?id=12mJyK7w9NLJ88q7FHy2vtkT4pKqnzL5S
-tar -xvf mosei.tar
-rm mosei.tar
-cd ..
-```
-
-Train a model
-```
-python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --tensors_path tensors/mosei_text.pk --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --trials 1 --mode train
-```
-
-Realistically, you would probably want to run inference on an unseen test set, but if you'd like, you can run inference on the whole dataset like this.
-```
-python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --mode inference
-```
-
-Since we are passing in real labels, we can set the `--evaluate_inference` flag and see how we would perform on the full dataset.  Again, this is not a realistic test, because we trained on a significant part of this dataset.  This is just to demonstrate how you would run inference on a dataset you choose to pass in.
-```
-python3 main.py --modality text --transcripts_path data/mosei/CMU_MOSEI_TimestampedWords.csd --labels_path data/mosei/CMU_MOSEI_All_Labels.csd --mode inference --evaluate_inference 1
-```
-
-This model only includes the text modality, as the audio files for MOSEI are quite large (14G).  If you would like those, you can download them here.
-
-```
-cd data/mosei
-gdown https://drive.google.com/uc?id=1gslTSa9O9UbACuPWc-lAE770GyxsjI-c
-tar -xvf mosei_wavs.tar
-rm mosei_wavs.tar
-cd ../..
-```
-
-### Notes
-* **When moving to another dataset with different labels than IEMOCAP**, you'll need to modify `label_map_fn` in `main.py` which maps labels from their original form (e.g., [`hap`, `neu`, `ang`, `sad`]) to indeces we can use for classification (e.g., [0,1,2,3]).  You'll also need to modify `num_labels`, which defines the dimensionality of the output classifiers (i.e., the number of nodes in the last dense layer). I would recommend opening a debugging session or using print statements to see the exact form of your data, and how you'll need to change it.
-    
-Here is the definition for `label_map_fn`:
-```python
-def label_map_fn(labels):
-    '''
-    input: a one-dimensional array of labels (e.g., shape (10,...))
-    output: a one-dimensional array of labels as integers
-    '''
-```
-
-If you would like to use vscode to debug, here is a `launch.json` file you can use to start the debugger. If you haven't done this before, you'll need to select your python interpreter as the one tied to the `conda` environment you're using.
-```json
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Python: Current File",
-            "type": "python",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "args": ["--cross_utterance=0", "--modality=text", "--tensors_path=unique", "--seq_len=50", "--keys_path=data/iemocap/utt_keys.json"]
-        }
-    ]
+    'wav_id': {
+        'features': [[0], [1], [0], [2]...] # np array of type int32 (for categorical tasks) and shape (m,1) for m utterances in this wav_id
+        'intervals': [[6.2, 7.1], ...] # np array of shape (m,2) containing start / end times for each utterance of type float
+    }
 }
 ```
 
-* The `--seq_len` flag controls the max sequence length during alignment.  If `text` is one of the modalities, `seq_len` is the max number of words per utterance (wrapped if more, padded if less). If only audio, this controls the max number of mfbs to allow per utterance.  When involving text, `seq_len=50` is usually sufficient, but only audio should be more like `250`, as mfbs are sampled every .1 seconds.
-* When grid searching, make sure to use tensors_path=unique so the different runs don't alter each other's data.
-* Transcripts files **must** end in `.pk`.
-* For a full list of arguments accepted by `main.py`, run `python3 main.py --help` or look at the bottom of the file where the arguments and their descriptions are defined.
-* In the transcripts and labels files, `intervals` are measured in seconds
-* To change how MFBs are extracted, see the `mfb_util.py` file and modify the global variables there.
-* When grid searching (especially on audio classification tasks), watch out for the number of parallel threads you run per GPU.  The tensors are very large, and you may encounter OOM errors.  If this happens, simply set `num_parallel` in `generate.py` to 1. For details on this behavior, see the [Standard-Grid](https://github.com/abwilf/standard-grid) repository.
+To see our IEMOCAP labels, pop them open in a python shell.
+```
+python3
+from utils import *
+labels = load_pk('data/iemocap/IEMOCAP_ValenceLabels.pk')
+k = lkeys(labels)[0]
+print(labels[k])
+```
 
-## Roadmap (to be implemented)
-* FMT support for within utterance classification
-* MOSEI links
+#### Other Relevant Inputs to Data Formatting / Creation
+`--tensors_path`: if `unique`, the program will recreate tensors (by aligning and creating embeddings) each time the program is run in training mode (the default, or specified with `--mode train`). If a tensors path is specified and the tensor exists, the program will use those tensors and skip data preprocessing.  This is a useful feature because if, for example, you'd like to extract features & embeddings on one machine, then train on another (e.g. extract MFB's and BERT embeddings on ARMIS, then port over a tensor of embeddings to train on a lab machine), you can run the program in training mode with `--tensors_path my_tensors.pk`, end the program when it begins training (or add an `exit()` command at the end of `load_data()` after it saves the tensors), and port the tensors over to the lab machine.  Then, if you specify `--tensors_path my_tensors.pk` and it exists, you can skip data preprocessing during training in the future.
+`--audio_path, --overwrite_mfbs`: the path to the MFB's.  If this exists and `--overwrite_mfbs` is 0, the program will not generate new MFB's from `--wav_dir`, else it will.
+`--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher.
+`--keys_path`: Here you can specify keys for the program to train / validate / test against (in case you want to do leave-one-speaker-out validation, or something similar).  See the form in `data/iemocap/utt_keys.json` for details.
 
-## Credits
-Made for and with support of the CHAI Lab at the University of Michigan, advised by Professor Emily Mower Provost. The HFFN code (`hffn.py` and `util_function.py`) came from Mai et al., the [MMSDK](https://github.com/A2Zadeh/CMU-MultimodalSDK) from Zadeh et al.
+
+### Training
+--model_path val_model
+
+### Inference
