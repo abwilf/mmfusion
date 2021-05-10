@@ -1,5 +1,5 @@
 # Multimodal Fusion
-This package offers unimodal and multimodal approaches to within-utterance and cross-utterance classification problems. In essence, this module takes in a transcripts file and a path to a directory containing wavs, generates MFB's from those wavs, aligns the MFB's with the transcripts, extracts word embeddings using BERT, packages everything together in a single `tensors` object (which is saved to disk in `--tensors_path`), then trains and tests on this object according to some parameters you pass in.  In this README, I first describe the requirements, then the data format for how to add new datasets, and the parameters required to run the program.
+This package offers unimodal and multimodal approaches to within-utterance and cross-utterance classification problems. In essence, this module takes in a transcripts file and a path to a directory containing wavs, generates MFB's from those wavs, aligns the MFB's with the transcripts, extracts word embeddings using BERT, packages everything together in a single `tensors` object (which is saved to disk in `--tensors_path`), then trains and tests on this object according to some parameters you pass in.  In this README, I first describe the requirements, then the data format for how to add new datasets, then finally the parameters required to run the program.
 
 ## Requirements
 1. `conda` is installed
@@ -34,8 +34,9 @@ BASE_PATH = '/z/abwilf/mmf' # the path to this directory
 Create and save a file called `azure_secrets.json`, with the following code inside.  If you decide to use azure for speech recognition in the future, this is where your API information will go.  If you are using this from the CHAI lab, contact me for our keys.
 ```
 {
-    "cognitive_key": "temp",
-    "service_region": "temp"
+    "cognitive_key": "...",
+    "service_region": "...",
+    "speaker_verification_key": "..."
 }
 ```
 
@@ -62,11 +63,11 @@ If you need to list users, remove users, or identify users, there are helper fun
 The three main inputs to our training pipeline are the transcripts, the wav directory, and the labels.
 
 #### Transcripts
-The transcripts must be a dictionary, saved in `--transcripts_path` as a pickle file and formatted as such:
+The transcripts must be a dictionary, saved in `--transcripts_path` as a pickle file and formatted as follows:
 ```python
 {
     'wav_id': {
-        'features': [['word1'], ['word2']..., ['wordn']], # np array of shape (n,1) for n words, stored in utf8 encoding (standard strings) or binary encoding
+        'features': [['word1'], ['word2']..., ['wordn']], # np array of shape (n,1) for n words in the recording (across multiple utterances), stored in utf8 encoding (standard strings) or binary encoding
         'intervals': [ [0,1.2], [1.2, 2.3]...], # np array of shape (n,2) of floats describing the start and end time of each word in seconds from the start of the wav file
     }
 }
@@ -128,16 +129,16 @@ print(labels[k])
 ```
 
 #### Other Relevant Inputs to Data Formatting / Creation
-`--tensors_path`: if `unique`, the program will recreate tensors (by aligning and creating embeddings) each time the program is run in training mode (the default, or specified with `--mode train`). If a tensors path is specified and the tensor exists, the program will use those tensors and skip data preprocessing.  This is a useful feature because if, for example, you'd like to extract features & embeddings on one machine, then train on another (e.g. extract MFB's and BERT embeddings on ARMIS, then port over a tensor of embeddings to train on a lab machine), you can run the program in training mode with `--tensors_path my_tensors.pk`, end the program when it begins training (or add an `exit()` command at the end of `load_data()` after it saves the tensors), and port the tensors over to the lab machine.  Then, if you specify `--tensors_path my_tensors.pk` and it exists, you can skip data preprocessing during training in the future.
-`--audio_path, --overwrite_mfbs`: the path to the MFB's.  If this exists and `--overwrite_mfbs` is 0, the program will not generate new MFB's from `--wav_dir`, else it will.
-`--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher.
-`--keys_path`: Here you can specify keys for the program to train / validate / test against (in case you want to do leave-one-speaker-out validation, or something similar).  See the form in `data/iemocap/utt_keys.json` for details.
+* `--tensors_path`: if `unique`, the program will recreate tensors (by aligning and creating embeddings) each time the program is run in training mode (the default, or specified with `--mode train`). If a tensors path is specified and the tensor exists, the program will use those tensors and skip data preprocessing.  This is a useful feature because if, for example, you'd like to extract features & embeddings on one machine, then train on another (e.g. extract MFB's and BERT embeddings on ARMIS, then port over a tensor of embeddings to train on a lab machine), you can run the program in training mode with `--tensors_path my_tensors.pk`, end the program when it begins training (or add an `exit()` command at the end of `load_data()` after it saves the tensors), and port the tensors over to the lab machine.  Then, if you specify `--tensors_path my_tensors.pk` and it exists, you can skip data preprocessing during training in the future.
+* `--audio_path, --overwrite_mfbs`: the path to the MFB's.  If this exists and `--overwrite_mfbs` is 0, the program will not generate new MFB's from `--wav_dir`, else it will.
+* `--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher.
+* `--keys_path`: Here you can specify keys for the program to train / validate / test against (in case you want to do leave-one-speaker-out validation, or something similar).  See the form in `data/iemocap/utt_keys.json` for details.
 
 ### Training
 In training, the relevant arguments are:
-`--model_path`: where the trained model should be saved
-`--modality`: which modalities to use. Options are `text` (unimodal lexical), `audio` (unimodal acoustic), or `text,audio` (multimodal).
-`--mode`: this defaults to `train`.
+* `--model_path`: where the trained model should be saved
+* `--modality`: which modalities to use. Options are `text` (unimodal lexical), `audio` (unimodal acoustic), or `text,audio` (multimodal).
+* `--mode`: this defaults to `train`.
 
 To train a model saved in `val_model` on **valence** labels using both modalities, you can run
 ```
