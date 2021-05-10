@@ -40,9 +40,7 @@ import librosa
 import soundfile as sf
 import scipy.io.wavfile as wav
 import subprocess
-
-sys.path.append(DEEPSPEECH_PATH)
-import convert
+import ds_utils
 
 from transcribe import *
 from speaker_verification import *
@@ -281,12 +279,12 @@ def load_data():
         recom_dir = args['wav_dir']+'_recombined'
         
         rmtree(temp_wav_dir)
-        convert.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
+        ds_utils.split_wavs(args['wav_dir'], temp_wav_dir_in=temp_wav_dir, agg_in=args['VAD_agg'])
         assert args['mode'] == 'inference', 'Transcribing on preformatted datasets is not supported yet'
 
         wav_paths = glob(join(temp_wav_dir, '*'))
         print(f'Transcribing {temp_wav_dir}')
-        if 'text' in args['modality']:
+        # if 'text' in args['modality']:
         if False:
             transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
             save_pk(args['transcripts_path'], transcripts)

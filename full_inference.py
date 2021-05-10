@@ -14,7 +14,7 @@ def full_inference(speaker_profile):
         'seq_len': 150,
         'model_path': 'val_model',
         'cross_utterance': 0,
-        'num_labels': num_labels,
+        'num_labels': 3,
         'speaker_profile': speaker_profile,
         
         ## IF predicting
@@ -51,7 +51,7 @@ def full_inference(speaker_profile):
         'seq_len': 35000,
         'model_path': 'act_model',
         'cross_utterance': 0,
-        'num_labels': num_labels,
+        'num_labels': 3,
         'speaker_profile': '',
         
         'labels_path': 'test_data/act_utt_labels.json',

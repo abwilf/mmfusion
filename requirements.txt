@@ -9,7 +9,6 @@ pathlib==1.0.1
 scikit-learn==0.23.1
 scipy==1.4.1
 seaborn==0.11.0
-deepspeech==0.7.4
 webrtcvad==2.0.10
 azure-cognitiveservices-speech==1.15.0
 scipy
