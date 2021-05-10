@@ -129,9 +129,9 @@ print(labels[k])
 ```
 
 #### Other Relevant Inputs to Data Formatting / Creation
-* `--tensors_path`: if `unique`, the program will recreate tensors (by aligning and creating embeddings) each time the program is run in training mode (the default, or specified with `--mode train`). If a tensors path is specified and the tensor exists, the program will use those tensors and skip data preprocessing.  This is a useful feature because if, for example, you'd like to extract features & embeddings on one machine, then train on another (e.g. extract MFB's and BERT embeddings on ARMIS, then port over a tensor of embeddings to train on a lab machine), you can run the program in training mode with `--tensors_path my_tensors.pk`, end the program when it begins training (or add an `exit()` command at the end of `load_data()` after it saves the tensors), and port the tensors over to the lab machine.  Then, if you specify `--tensors_path my_tensors.pk` and it exists, you can skip data preprocessing during training in the future.
+* `--tensors_path`: if `unique`, the program will recreate tensors (by aligning and creating embeddings) each time the program is run in training mode (the default, or specified with `--mode train`). If a tensors path is specified and the tensor exists, the program will use those tensors and skip data preprocessing.  This is a useful feature because if, for example, you'd like to extract features & embeddings on one machine, then train on another (e.g., to extract MFB's and BERT embeddings on ARMIS, then port over a tensor of embeddings to train on a lab machine), you can run the program in training mode with `--tensors_path my_tensors.pk`, end the program when it begins training (or add an `exit()` command at the end of `load_data()` in `main.py` after it saves the tensors), and port `my_tensors.pk` over to the lab machine using `rsync`.  Then, if you specify `--tensors_path my_tensors.pk` in training on the lab machine, you can skip data processing on the lab machines.
 * `--audio_path, --overwrite_mfbs`: the path to the MFB's.  If this exists and `--overwrite_mfbs` is 0, the program will not generate new MFB's from `--wav_dir`, else it will.
-* `--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher.
+* `--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher if audio only, in 30-50,000 range depending on the length of your utterances and sampling rate.
 * `--keys_path`: Here you can specify keys for the program to train / validate / test against (in case you want to do leave-one-speaker-out validation, or something similar).  See the form in `data/iemocap/utt_keys.json` for details.
 
 ### Training
@@ -140,7 +140,7 @@ In training, the relevant arguments are:
 * `--modality`: which modalities to use. Options are `text` (unimodal lexical), `audio` (unimodal acoustic), or `text,audio` (multimodal).
 * `--mode`: this defaults to `train`.
 
-To train a model saved in `val_model` on **valence** labels using both modalities, you can run
+To train a model saved in `val_model` on **valence** labels using both modalities, you can run the following (if you have problems because of the CUDA_VISIBLE_DEVICES line, just remove it - it just selects a GPU)
 ```
 CUDA_VISIBLE_DEVICES=1 python3 main.py --modality text,audio --tensors_path unique --labels_path data/iemocap/IEMOCAP_ValenceLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --wav_dir /z/abwilf/iemocap_wavs/clean --overwrite_mfbs 0 --model_path val_model --seq_len 150 --keys_path data/iemocap/utt_keys.json --mode train
 ```
@@ -151,7 +151,7 @@ CUDA_VISIBLE_DEVICES=1 python3 main.py --modality audio --tensors_path unique --
 ```
     
 ### Inference
-There are two cases of interest to us in considering inference.  First, where labels are known, and we wish to test our models' performance. Second, where labels are unknown and we simply desire the predictions.
+Inference can be broken down into two cases.  First, where labels are known, and we wish to test our models' performance on an unseen test set. Second, where labels are unknown and we simply desire the predictions.
 
 #### When Labels are Known: Evaluate Inference
 The flag `--evaluate_inference` allows you to control whether the pipeline will evaluate how well the model performs, or just yield the prediction.
@@ -162,7 +162,7 @@ rm tensors.pk
 CUDA_VISIBLE_DEVICES=1 python3 main.py --modality text,audio --tensors_path tensors.pk --labels_path test_data/val_utt_labels.json --transcripts_path test_data/transcripts.pk --audio_path test_data/mfb.pk --wav_dir test_data/wavs --overwrite_mfbs 1 --mode inference --evaluate_inference 1 --print_transcripts 1 --seq_len 150 --model_path val_model
 ```
 
-A quick aside: above, I said that labels had to be stored as pickle files.  That is preferable, but I've actually built in flexibility for loading / saving labels files as `json` objects so you can edit them directly.  To load / save a python object as `json`, use the `load_json`, `save_json` functions in `utils.py`).  The labels file must be of the following form:
+A quick aside: above, I said that labels had to be stored as pickle files.  That is preferable, but I've actually built in flexibility for loading / saving labels files as `json` objects so you can edit them directly.  To load / save a python object as `json`, use the `load_json`, `save_json` functions in `utils.py`.  The labels file must be of the following form:
 ```python
 {
     'wav_id': {
@@ -175,7 +175,7 @@ A quick aside: above, I said that labels had to be stored as pickle files.  That
 If you wanted to add more wavs to `test_data/wavs` to expand the test set and further validate the performance of the model, it is a bit tricky to add labels, because you first need to know how the wavs will be segmented by the VAD.  To do this, you can run the above program until you hit an error telling you the labels are not all accounted for.  Then you can look in `test_data/wavs_segments` to listen to the individual utterances and manually add the labels.  This is cumbersome and time consuming, but unfortunately I don't see a way around it, as your labels will need to be at the utterance level, but you won't know how utterances are defined until you see how the VAD has split up the wav.
 
 
-IF youo wanted to test the **activation** model on the same wavs with labels in `test_data/act_utt_labels.json`, you would use the following command.
+If you wanted to test the **activation** model on the same wavs with labels in `test_data/act_utt_labels.json`, you would use the following command.
 ```
 rm tensors.pk
 CUDA_VISIBLE_DEVICES=1 python3 main.py --modality audio --tensors_path rm tensors.pk --labels_path test_data/act_utt_labels.json --transcripts_path test_data/transcripts.pk --audio_path test_data/mfb.pk --wav_dir test_data/wavs --overwrite_mfbs 1 --mode inference --evaluate_inference 1 --print_transcripts 1 --seq_len 35000 --model_path act_model --keys_path data/iemocap/utt_keys.json
@@ -191,3 +191,17 @@ python3 test.py
 ```
 
 As a note: there are two cases where the program will intentionally throw a `ValueError`: (1) when there are no wavs in preds/wavs, (2) when there is no speech recognized in an entire wav.  This is by design, so that the handling function will know not to add anything to the database.
+
+## Documentation & Important Files
+If you are planning to read the code, I would start with `main.py`.  That is where all functions are called from, and it is well commented.  Other files are listed below.
+
+* `main.py`: This is the main file, handling the data processing, and training the models.
+* `full_inference.py`: This runs full inference, including speaker verification.
+* `test.py`: This is a top level example calling `full_inference` within a try/except block to account for ValueErrors.  This is a simple version of the code Owen will use to call `full_inference` on the back end.
+* `models.py`: Models are defined here.
+* `utils.py`: Utility functions.  You should not have to read this unless you are curious about how something works.
+* `speaker_verification.py`: Where speaker verification functions come from, used for identification and enrollment in the pipeline
+* `ds_utils.py`: Deepspeech utilities used for VAD segmentation
+* `interpret.py, generate.py, status.py`: Utilities for grid search using Standard-Grid.
+* `transcribe.py`: Azure transcription
+* `util_function.py, hffn.py`: Supporting functions for HFFN (deprecated).
