@@ -7,7 +7,7 @@ def full_inference(speaker_profile):
     args = {
         **default,
         'modality': 'text,audio',
-        'tensors_path': 'tensors.pk',
+        'tensors_path': 'preds/tensors.pk',
         'overwrite_mfbs': 1,
         'mode': 'inference',
         'print_transcripts': 1,
@@ -44,7 +44,7 @@ def full_inference(speaker_profile):
     args = {
         **default,
         'modality': 'audio',
-        'tensors_path': 'tensors.pk',
+        'tensors_path': 'preds/tensors.pk',
         'overwrite_mfbs': 1,
         'mode': 'inference',
         'print_transcripts': 1,

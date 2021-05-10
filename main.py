@@ -289,7 +289,7 @@ def load_data():
             print(f'Transcribing {temp_wav_dir}')
             
             if 'text' in args['modality']:
-            # if False:
+            # if False: # uncomment this line if you don't want to wait for transcripts to be recalculated when developing the inference pipeline
                 transcripts = { wav_path.split('/')[-1].replace('.wav', ''): dict(lzip(['features', 'intervals', 'confidence'], get_transcript(wav_path))) for wav_path in tqdm(wav_paths) }
                 save_pk(args['transcripts_path'], transcripts)
             else:

@@ -39,6 +39,23 @@ Create and save a file called `azure_secrets.json`, with the following code insi
 }
 ```
 
+### Enrolling Users for Speaker Verification
+Ask the user to speak into a microphone for at least 30 seconds in English (preferably more). Noise should be minimal. Save this as a wav file (mono, signed 16-bit PCM encoding; Audacity is free and does this perfectly). Name this file `enrollment.wav`, then run the enrollment program.
+
+```python
+python3 speaker_verification.py
+```
+
+You should see the resulting profile ID in a few seconds.
+```
+Profile id is:
+8c4af779-771f-4f5e-9dcf-7be56b28cdd2
+Enrollment successful!
+```
+
+When you add the person to the database, make sure this is in their information, and is passed to the inference program as their `speaker_profile` in `full_inference.py` when they upload a wav (this should have been implemented by Owen).
+
+If you need to list users, remove users, or identify users, there are helper functions in `speaker_verification.py` to do so.
 
 
 ### Training Data Format
@@ -116,8 +133,60 @@ print(labels[k])
 `--seq_len`: the legnth of the sequence you'd like to wrap to.  When the text modality is present, this is the number of words you'd like to wrap to.  For example, if the `seq_len` is 10, and an utterance has the words "one two three...eleven", the last word would be chopped off.  If an utterance had the words "one, two, three", there would be zero padding for the last seven slots. If just the audio modality, this is the number of MFB frames you'd like to take.  This number is usually much higher.
 `--keys_path`: Here you can specify keys for the program to train / validate / test against (in case you want to do leave-one-speaker-out validation, or something similar).  See the form in `data/iemocap/utt_keys.json` for details.
 
-
 ### Training
---model_path val_model
+In training, the relevant arguments are:
+`--model_path`: where the trained model should be saved
+`--modality`: which modalities to use. Options are `text` (unimodal lexical), `audio` (unimodal acoustic), or `text,audio` (multimodal).
+`--mode`: this defaults to `train`.
 
+To train a model saved in `val_model` on **valence** labels using both modalities, you can run
+```
+CUDA_VISIBLE_DEVICES=1 python3 main.py --modality text,audio --tensors_path unique --labels_path data/iemocap/IEMOCAP_ValenceLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --wav_dir /z/abwilf/iemocap_wavs/clean --overwrite_mfbs 0 --model_path val_model --seq_len 150 --keys_path data/iemocap/utt_keys.json --mode train
+```
+
+To train a model saved in `act_model` on **activation** labels using only the acoustic modality, you can run
+```
+CUDA_VISIBLE_DEVICES=1 python3 main.py --modality audio --tensors_path unique --labels_path data/iemocap/IEMOCAP_ActivationLabels.pk --transcripts_path data/iemocap/IEMOCAP_TimestampedWords.pk --audio_path data/iemocap/mfb.pk --wav_dir /z/abwilf/iemocap_wavs/clean --seq_len 35000 --overwrite_mfbs 0 --model_path act_model --keys_path data/iemocap/utt_keys.json --mode train
+```
+    
 ### Inference
+There are two cases of interest to us in considering inference.  First, where labels are known, and we wish to test our models' performance. Second, where labels are unknown and we simply desire the predictions.
+
+#### When Labels are Known: Evaluate Inference
+The flag `--evaluate_inference` allows you to control whether the pipeline will evaluate how well the model performs, or just yield the prediction.
+
+For example, to test the **valence** model on wavs in `test_data/wavs` with labels in `test_data/val_utt_labels.json`, you could use the following command.
+```
+rm tensors.pk
+CUDA_VISIBLE_DEVICES=1 python3 main.py --modality text,audio --tensors_path tensors.pk --labels_path test_data/val_utt_labels.json --transcripts_path test_data/transcripts.pk --audio_path test_data/mfb.pk --wav_dir test_data/wavs --overwrite_mfbs 1 --mode inference --evaluate_inference 1 --print_transcripts 1 --seq_len 150 --model_path val_model
+```
+
+A quick aside: above, I said that labels had to be stored as pickle files.  That is preferable, but I've actually built in flexibility for loading / saving labels files as `json` objects so you can edit them directly.  To load / save a python object as `json`, use the `load_json`, `save_json` functions in `utils.py`).  The labels file must be of the following form:
+```python
+{
+    'wav_id': {
+        'features': [0,1,2], # shape (m,) for m utterances in wav_id
+        'intervals': null # None if python object
+    }
+}
+```
+
+If you wanted to add more wavs to `test_data/wavs` to expand the test set and further validate the performance of the model, it is a bit tricky to add labels, because you first need to know how the wavs will be segmented by the VAD.  To do this, you can run the above program until you hit an error telling you the labels are not all accounted for.  Then you can look in `test_data/wavs_segments` to listen to the individual utterances and manually add the labels.  This is cumbersome and time consuming, but unfortunately I don't see a way around it, as your labels will need to be at the utterance level, but you won't know how utterances are defined until you see how the VAD has split up the wav.
+
+
+IF youo wanted to test the **activation** model on the same wavs with labels in `test_data/act_utt_labels.json`, you would use the following command.
+```
+rm tensors.pk
+CUDA_VISIBLE_DEVICES=1 python3 main.py --modality audio --tensors_path rm tensors.pk --labels_path test_data/act_utt_labels.json --transcripts_path test_data/transcripts.pk --audio_path test_data/mfb.pk --wav_dir test_data/wavs --overwrite_mfbs 1 --mode inference --evaluate_inference 1 --print_transcripts 1 --seq_len 35000 --model_path act_model --keys_path data/iemocap/utt_keys.json
+```
+
+#### When Labels are Unknown
+When labels are unknown, we are performing full inference.   This means that we will also be performing speaker verification on each of the utterances.  To do this, we need to pass the speaker verification profile_id of the participant.  This happens automatically as part of Owen's code, fetching from the database.  To keep everything self contained and secure for production, we store everything we save to the disk in a folder for predictions, `preds`.  So, to see this in action add some wav files to `preds/wavs`, then run `test.py`.  It should output predictions in the form we store in the database by calling `full_inference.py`, including speaker verification output from a hardcoded profile id in `test.py` (in production, this is pulled from the database).
+```
+rm -rf preds/wavs
+mkdir -p preds/wavs
+cp -R test_data/wavs/* preds/wavs
+python3 test.py
+```
+
+As a note: there are two cases where the program will intentionally throw a `ValueError`: (1) when there are no wavs in preds/wavs, (2) when there is no speech recognized in an entire wav.  This is by design, so that the handling function will know not to add anything to the database.
