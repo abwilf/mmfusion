@@ -53,8 +53,6 @@ def full_inference(speaker_profile):
         'cross_utterance': 0,
         'num_labels': 3,
         'speaker_profile': '',
-        
-        'labels_path': 'test_data/act_utt_labels.json',
         'evaluate_inference': 1,
 
         ## IF predicting
@@ -66,7 +64,7 @@ def full_inference(speaker_profile):
 
         ## IF testing
         # 'evaluate_inference': 1,
-        # 'labels_path': 'test_data/val_utt_labels.json',
+        # 'labels_path': 'test_data/act_utt_labels.json',
         # 'transcripts_path': 'test_data/transcripts.pk',
         # 'audio_path': 'test_data/mfb.pk',
         # 'wav_dir': 'test_data/wavs',
@@ -91,7 +89,7 @@ def full_inference(speaker_profile):
 
     # WIPE PREDS
     shutil.rmtree('preds')
-    os.mkdir('preds')
+    mkdirp('preds/wavs')
 
     return res
 

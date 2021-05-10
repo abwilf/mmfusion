@@ -468,7 +468,8 @@ def load_data():
 
         labels = (tensors['labels'] if not fake_labels else np.ones(tensors[args['modality'].split(',')[0]].shape[0:1])).reshape(-1)
         ids = np.squeeze(tensors['ids'])
-        text = tensors['text']
+        if 'text' in args['modality']:
+            text = tensors['text']
 
         if args['mode'] == 'inference':
             args['test_keys'] = np.squeeze(tensors['ids'])
@@ -510,8 +511,6 @@ def load_data():
         if args['mode'] != 'inference':
             print(f'Saving tensors to {args["tensors_path"]}.pk')
             save_pk(args['tensors_path'], (train, val, test))
-        else:
-            save_pk('./.temp_tensors.pk', tensors)
 
     if args['mode'] != 'inference':
         args['train_sample_weight'] = get_sample_weight(train[-2]) # train labels
@@ -583,7 +582,7 @@ def main_inference(args_in):
 
         df = pd.DataFrame({'id': ids, 'pred': np.argmax(preds, axis=-1), 'label': test_labels, 'correct': (np.argmax(preds, axis=-1)==test_labels).astype('int32')})
         print(df)
-        save_pk('preds/df.pk', df)
+        # save_pk('preds/df.pk', df)
 
     print('Your output will be in output/inference.pk')
     full_res = {
