@@ -38,6 +38,7 @@ def full_inference(speaker_profile):
     val_preds = val_inf['predictions']
     val_ids = val_inf['ids']
     speaker_ver = val_inf['speaker_ver']
+    segment_lengths = val_inf['segment_lengths']
     rmfile(args['tensors_path'])
 
     ## activation
@@ -84,7 +85,8 @@ def full_inference(speaker_profile):
         'val_ids': val_ids,
         'act': get_three_bin(act_inf['predictions']),
         'act_ids': act_inf['ids'],
-        'speaker_ver': speaker_ver
+        'speaker_ver': speaker_ver,
+        'segment_lengths': segment_lengths,
     }
 
     # WIPE PREDS

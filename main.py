@@ -256,6 +256,9 @@ def add_seq(dataset, obj, key_name, obj_type='path'):
     dataset.computational_sequences[key_name] = compseq
 
 def load_data():
+    args['speaker_ver'] = {} # vid: [ [{profile_id: 'profile id', score: 'score' for all profile_ids in rank order] for _ in num_utts]
+    args['segment_lengths'] = {} # utt: length
+    
     if exists(args['tensors_path']) and not args['overwrite_tensors'] and not args['mode']=='inference':
         print('Loading data...')
         train, val, test = load_pk(args['tensors_path'])
@@ -268,8 +271,6 @@ def load_data():
         transcripts = None
         if args['mode'] == 'inference':
             # speaker verification
-            args['speaker_ver'] = {} # vid: [ [{profile_id: 'profile id', score: 'score' for all profile_ids in rank order] for _ in num_utts]
-            
             timing_path = '/'.join(args['transcripts_path'].split('/')[:-1])+'/timing.pk'
 
             if args['wav_dir'][-1]=='/':
@@ -395,6 +396,8 @@ def load_data():
                     for wav_path in wav_paths:
                         y, sr = librosa.load(wav_path)
                         wav_len = y.shape[0]/sr # duration of wav in seconds
+                        utt_name = wav_path.split('/')[-1].split('.wav')[0]
+                        args['segment_lengths'][utt_name] = wav_len
 
                         if wav_len < 4:
                             num_mult = np.ceil(4/wav_len).astype('int32')
@@ -589,7 +592,8 @@ def main_inference(args_in):
         'data': test_data if len(args['modality'].split(','))==1 else (test_audio, test_text),
         'predictions': preds,
         'ids': ids,
-        'speaker_ver': args['speaker_ver']
+        'speaker_ver': args['speaker_ver'],
+        'segment_lengths': args['segment_lengths']
     }
     return full_res
 

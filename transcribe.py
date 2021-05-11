@@ -41,8 +41,3 @@ def get_transcript(wav_path):
         assert False
     
     return np.expand_dims(features, axis=-1), intervals, confidence
-
-# # path = 'test_wavs/test.wav'
-# path='/z/abwilf/mmfusion2/temp_wavs/test__-__2.wav'
-# print(get_transcript(path))
-# # save_pk('/z/abwilf/mmfusion/blah.pk', get_transcript(path))
