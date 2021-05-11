@@ -124,6 +124,7 @@ def get_mfb_stats(video_key):
     mfb_stats['length'].append(mfb.shape[0])
 
 def deploy_unaligned_mfb_csd(check_labels=True):
+    # EP note: legacy from CMU (csd)
     csd_name = f'mfb_temp'
 
     wav_keys = lmap(lambda elt: elt.split('/')[-1].split('.wav')[0], glob(join(args['wav_dir'], '*.wav')))
@@ -512,8 +513,11 @@ def load_data():
             test = text[test_idxs], audio[test_idxs], labels[test_idxs], ids[test_idxs]
 
         if args['mode'] != 'inference':
-            print(f'Saving tensors to {args["tensors_path"]}.pk')
+            print(f'Saving tensors to {args["tensors_path"]}')
             save_pk(args['tensors_path'], (train, val, test))
+
+    # used for halting program to break up data processing and training
+    # exit()
 
     if args['mode'] != 'inference':
         args['train_sample_weight'] = get_sample_weight(train[-2]) # train labels
